@@ -1,0 +1,34 @@
+================================================================================
+DATOS DE GEOLOCALIZACION DE ACCESS POINTS WiFi - UAB
+UAB THE HACK! 2025 - Challenge DTIC WiFi Analysis
+================================================================================
+
+CONTENIDO:
+  - 958 Access Points geolocalizados del campus UAB
+  - Coordenadas GPS precisas de cada AP
+  - Informacion de edificio y planta
+  - 96.9% de matching con datos WiFi anonimizados
+
+EMPEZAR:
+  1. Abre INDEX.md para ver la estructura completa
+  2. Lee QUICK_START.md para comenzar en 5 minutos
+  3. Lee README.md para documentacion completa
+
+INSTALACION:
+  pip install geopandas folium pandas matplotlib
+
+EJECUTAR EJEMPLOS:
+  python examples/01_basic_map.py
+  python examples/02_heatmap.py
+  python examples/03_building_stats.py
+
+ARCHIVOS PRINCIPALES:
+  data/aps_geolocalizados_wgs84.geojson  - Datos en WGS84 (RECOMENDADO)
+  data/aps_geolocalizados_etrs89.geojson - Datos en ETRS89 UTM
+
+DOCUMENTACION:
+  README.md          - Guia completa
+  QUICK_START.md     - Quick start (5 min)
+  INDEX.md           - Indice de archivos
+  docs/FAQ.md        - Preguntas frecuentes
+  docs/CAMPOS.md     - Descripcion de campos
