@@ -17,7 +17,7 @@ class MyApp extends StatelessWidget {
        // hot restart will change the entire theme.
         colorScheme: .fromSeed(seedColor: Colors.blue),
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const MyHomePage(title: 'Flutter Demo'),
     );
   }
 }
@@ -46,7 +46,7 @@ class CandidatePage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: Text('candidates')),
       body: Center(
-        child: FutureBuilder<List<int>>(
+        child: FutureBuilder<List<List<double>>>(
           future: future,
           builder: (context, snapshot) {
             // 正在加载
@@ -62,11 +62,11 @@ class CandidatePage extends StatelessWidget {
               return Text('No matching candidates found');
             }
             // 展示列表
-            final ids = snapshot.data!;
+            final coordinates = snapshot.data!;
             return ListView.builder(
-              itemCount: ids.length,
+              itemCount: coordinates.length,
               itemBuilder: (ctx, index) => ListTile(
-                title: Text('Node ID: ${ids[index]}'),
+                title: Text('纬度: ${coordinates[index][0]}, 经度: ${coordinates[index][1]}'),
               ),
             );
           },

@@ -21,4 +21,10 @@ def recommend(user: str):
 @app.get("/candidates/{lng}/{lat}/{radius}")
 def candidates(lng: float, lat: float, radius: int):
     nearest_node = ox.distance.nearest_nodes(G, lng, lat)
-    return {"candidates":find_qualified_in_range(G=G, original_target=nearest_node, acceptable_range=radius)}
+    candidates = find_qualified_in_range(G=G, original_target=nearest_node, acceptable_range=radius)
+    coordinates = []
+    for candidate in candidates:
+        x = G.nodes[candidate]['x']
+        y = G.nodes[candidate]['y']
+        coordinates.append([x,y])
+    return {"candidates":coordinates}
