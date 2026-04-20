@@ -14,9 +14,13 @@ class ApiService {
       final data = jsonDecode(response.body);
       print('后端返回的 candidates 类型: ${data['candidates'].runtimeType}');
       print('前两个元素: ${data['candidates'].take(2).toList()}');
-
+      final candidatesRaw = data['candidates'];
       // get list of candidates from the response
-      return List<List<double>>.from(data['candidates']);
+      return (candidatesRaw as List).map((item) {
+      // 每个 item 应为 [lat, lng] 形式的 List
+      return (item as List).map((coord) => (coord as num).toDouble()).toList();
+    }).toList();
+
     } else {
       throw Exception('Request failed, status code: ${response.statusCode}');
     }

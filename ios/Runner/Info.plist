@@ -68,9 +68,13 @@
 	</array>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-    	<key>NSAllowsArbitraryLoads</key>
-    	<true/>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
 	</dict>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>We need your location to find aps</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>need local network to connect with backend</string>
 </dict>
 
 </plist>
