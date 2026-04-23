@@ -16,7 +16,7 @@ random.seed(a=RANDOM_SEED)
 
 #======Functional======#
 
-def find_qualified_in_range(G, original_target, acceptable_range, verbose=0, weight_attr="length") -> list:
+def find_qualified_in_range(G, original_target, acceptable_range = 1000, verbose=0, weight_attr="length") -> list:
     """
     Recieves a graph, a target, and a "grace range" and calculates all the possible
     destinations within the "grace range" of the target.
@@ -24,7 +24,9 @@ def find_qualified_in_range(G, original_target, acceptable_range, verbose=0, wei
     Calculates the shortest path between the target and all the nodes of the graph and 
     keeps the ones that are within the range.
     """
-    distances, paths = nx.single_source_dijkstra(G, original_target, weight=weight_attr)
+   
+    distances, paths = nx.single_source_dijkstra(G, original_target, weight=weight_attr,cutoff = acceptable_range)
+
     qualified_destinations : list = []
     if verbose:
         print("Original target:", original_target)
@@ -36,7 +38,7 @@ def find_qualified_in_range(G, original_target, acceptable_range, verbose=0, wei
                 print("-->Destination", n)
                 print("-->Path:", paths[n])
                 print("-->Costs", distances[n])
-            
+    
     return qualified_destinations
 
 def find_paths_to_candidates(G, source:any, target_neighbours:list, weight_attr="length") -> list:
@@ -78,7 +80,7 @@ def pick_best_candidate(user_preferences:list, candidate_ap_properties:dict) -> 
 
 
 
-def find_ap_near_candidates(G, candidates: list, aps: list, amount=1) -> list:
+def find_ap_near_candidates(G, candidates: list, aps: list, amount=1,c_floor = 1) -> list:
     """
     This function will compute the specified amount of APs closest to each candidate.
 
@@ -101,9 +103,8 @@ def find_ap_near_candidates(G, candidates: list, aps: list, amount=1) -> list:
     pairs = []
     for candidate in candidates:
         node = G.nodes[candidate]
-        c_floor = node["height"]
+        # c_floor = node["height"] #road node have no key of "height"
         floor_compatible_aps = [ap for ap in aps if G.nodes[ap]["height"] == c_floor]
-
         x1, y1 = node["x"], node["y"]
         nearest = []
         nearest_ap = min(
@@ -119,7 +120,6 @@ def find_ap_near_candidates(G, candidates: list, aps: list, amount=1) -> list:
             )
             nearest.append(nearest_ap)
         pairs.append((candidate, nearest))
-
     return pairs
 
     
@@ -155,8 +155,8 @@ def add_aps_to_graph(G, path, bbox) -> list:
                 x = lon, y = lat,
                 node_type="ap",
                 height=row["Num_Planta"],
-                building=row["USER_EDIFI"]
-                #espacio=row["USER_Espai"]
+                building=row["USER_EDIFI"],
+                espacio=row["USER_Espai"]
             )
             ap_nodes.append(node_id)            
 
@@ -1014,14 +1014,6 @@ def show_graph_folium(G, ap_nodes=[], paths=[], source=None, targets=[]):
             ).add_to(m)
 
     return m
-
-
-
-
-
-
-
-
 
 ###################################
 #---------------MAIN--------------#

@@ -6,6 +6,8 @@ app = FastAPI()
 UAB_bbox = 2.09491, 41.50736, 2.11543, 41.49505
 G = ox.graph_from_bbox(UAB_bbox, network_type="walk")
 aps = add_aps_to_graph(G,path="geolocation_package/data/aps_geolocalizados_wgs84.geojson",bbox=UAB_bbox)
+# print(G.nodes[aps[0]].keys())       #   aps node :'x' 'y' 'node_type' 'height', 'building' 'espacio' etc.key
+# print(G.nodes[1493656218].keys()) # normal road point keys : only 'x' 'y' 'street_count' 
 
 @app.get("/")
 def root():
@@ -22,9 +24,22 @@ def recommend(user: str):
 def candidates(lng: float, lat: float, radius: int):
     nearest_node = ox.distance.nearest_nodes(G, lng, lat)
     candidates = find_qualified_in_range(G=G, original_target=nearest_node, acceptable_range=radius)
-    coordinates = []
-    for candidate in candidates:
-        x = G.nodes[candidate]['x']
-        y = G.nodes[candidate]['y']
-        coordinates.append([y,x])
-    return {"candidates":coordinates}
+    aps_near_candidates_pairs = find_ap_near_candidates(G = G,candidates = candidates,aps = aps, amount = 5,c_floor = 1)
+    # for candidate in candidates:
+    #     x = G.nodes[candidate]['x']
+    #     y = G.nodes[candidate]['y']
+    #     building = G.nodes[candidate]['building']
+    #     espacio = G.nodes[candidate]['espacio']
+    #     coordinates.append([y,x,building,espacio])
+    candi_info = []
+    for pair in aps_near_candidates_pairs:
+        for ap in pair[1]:
+            candi_info.append({
+                "lng": G.nodes[ap]['x'],
+                "lat": G.nodes[ap]['y'],
+                "building": G.nodes[ap]['building'],
+                "height": G.nodes[ap]['height'],
+                "espacio": G.nodes[ap]['espacio']
+    })
+            # candidates_information.append([x,y,building,height,espacio])
+    return {"candidates":candi_info}
