@@ -1,0 +1,5 @@
+This app use flutter and fastapi, flutter use language of dart, and fastapi use python,now we run our backend code on https://wifers-app.onrender.com, it use http and trans the information in JSON,
+
+Now I did not finish the recommend part, I will try to finish it before friday.
+
+Now we only have a map,which shows the marker of aps, we can tap on the marker to save the ap,or navigate to it use google navigator.

@@ -13,24 +13,18 @@ aps = add_aps_to_graph(G,path="geolocation_package/data/aps_geolocalizados_wgs84
 def root():
     return {"message": "API is working"}
 
-@app.get("/recommend/{user}")
-def recommend(user: str):
-    return {
-        "user": user,
-        "recommendations": ["Movie A", "Movie B", "Movie C"]
-    }
+# @app.get("/recommend/{user}")
+# def recommend(user: str):
+#     return {
+#         "user": user,
+#         "recommendations": ["Movie A", "Movie B", "Movie C"]
+#     }
 
 @app.get("/candidates/{lat}/{lng}/{radius}")
 def candidates(lng: float, lat: float, radius: int):
     nearest_node = ox.distance.nearest_nodes(G, lng, lat)
     candidates = find_qualified_in_range(G=G, original_target=nearest_node, acceptable_range=radius)
     aps_near_candidates_pairs = find_ap_near_candidates(G = G,candidates = candidates,aps = aps, amount = 5,c_floor = 1)
-    # for candidate in candidates:
-    #     x = G.nodes[candidate]['x']
-    #     y = G.nodes[candidate]['y']
-    #     building = G.nodes[candidate]['building']
-    #     espacio = G.nodes[candidate]['espacio']
-    #     coordinates.append([y,x,building,espacio])
     candi_info = []
     for pair in aps_near_candidates_pairs:
         for ap in pair[1]:
@@ -43,3 +37,15 @@ def candidates(lng: float, lat: float, radius: int):
     })
             # candidates_information.append([x,y,building,height,espacio])
     return {"candidates":candi_info}
+
+@app.get("/recommend/{lat}/{lng}/{radius}")
+def recommend(lng:float,lat:float,radius:int):
+    Aps = []
+    source = ox.distance.nearest_nodes(G, lng, lat) 
+    _candidates = candidates(lng,lat,radius)
+    candi_info = _candidates["candidates"]
+    for candidate in candi_info:
+        Aps.append([candidate['lng'],candidate['lat']])
+    min_distance = 10000
+    return Aps[1]
+

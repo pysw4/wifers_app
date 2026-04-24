@@ -60,23 +60,77 @@ def find_paths_to_candidates(G, source:any, target_neighbours:list, weight_attr=
 
     return weighted_paths
 
+# def pick_best_candidate(user_preferences:list, candidate_ap_properties:dict) -> any:
+#     """
+#     user_preferences: the user preferences, a list of how the user values each thin
+#     candidate_ap_properties: a dict where each key is a candidate (each with its label) 
+#         and the values are the propperties of the ap it is connected to
+
+#     Returns the label of the chosen node (could be an integer or a string)
+#     """
+#     best_score = -1000000
+#     best_candidate = None
+#     for (candidate, properties), preferences in zip(candidate_ap_properties.items(), user_preferences):
+#         weighted_score = sum([x*w for x,w in zip(properties, preferences)])
+#         if weighted_score > best_score:
+#             best_score = weighted_score
+#             best_candidate = candidate
+
+#     return best_candidate, best_score
+def compute_candidate_properties(G, source, candidate_ap_pairs):
+    """
+    This function computes a dictionary of the features (properties) of each candidate-ap pair
+    
+    Theoretically should work in real time but we will simulate it    
+    """
+    properties = {} # of the form {candidate:{property1:value1, property2:value2...}, candidate2:{...}}
+    """
+    PROPERTIES:
+        - Distance : dist
+        - Amount of users: user_count
+        - AP health: ap_health
+        - AP status: ap_status
+        - Download speed: download_speed
+        - Upload speed: upload_speed
+        - Signal strength: signal_strength
+        - AP performance: ap_performance
+    """
+    all_candidates = [i[0] for i in candidate_ap_pairs]
+    print(all_candidates)
+
+    for candidate, aps in candidate_ap_pairs:
+        print(candidate, aps)
+        distance = nx.dijkstra_path_length(G, source=source, target=candidate, weight='length')
+        properties[candidate] = {"dist":1/distance}
+
+    print(properties)
+
+    return properties
+
+
+
 def pick_best_candidate(user_preferences:list, candidate_ap_properties:dict) -> any:
     """
     user_preferences: the user preferences, a list of how the user values each thin
     candidate_ap_properties: a dict where each key is a candidate (each with its label) 
         and the values are the propperties of the ap it is connected to
+        example:
+        candidate_ap_properties = {"tables_hall:(100, 20, 15, 90)} where 100 may be the distance in meters
+                                                    , 20 the strength of the signal of its ap and so on...
 
     Returns the label of the chosen node (could be an integer or a string)
     """
     best_score = -1000000
     best_candidate = None
-    for (candidate, properties), preferences in zip(candidate_ap_properties.items(), user_preferences):
-        weighted_score = sum([x*w for x,w in zip(properties, preferences)])
+    for (candidate, properties) in candidate_ap_properties.items():
+        print(properties, user_preferences)
+        weighted_score = sum([x*w for (key,x),w in zip(properties.items(), user_preferences)])
         if weighted_score > best_score:
             best_score = weighted_score
             best_candidate = candidate
 
     return best_candidate, best_score
+
 
 
 
