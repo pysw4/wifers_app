@@ -2,10 +2,8 @@ from fastapi import FastAPI
 from find_paths import *
 from helper_script import *
 import networkx as nx
-from sklearn.tree import DecisionTreeClassifier
 import pandas as pd
 import numpy as np
-import random
 
 app = FastAPI()
 
@@ -59,60 +57,40 @@ def route(lng: float, lat: float, dest_lat: float, dest_lng: float):
     path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
     return {"path": path_coords}
 
-# Simple predictor model
-def create_simple_predictor():
-    # Create sample data based on AP features
-    ap_features = []
-    ap_status = []
-    
-    for ap in aps[:50]:  # Use first 50 APs for training
-        node = G.nodes[ap]
-        features = [
-            node.get('height', 0),
-            len(node.get('building', '')),
-            len(node.get('espacio', '')),
-            node.get('x', 0),
-            node.get('y', 0)
-        ]
-        ap_features.append(features)
-        # Random status for demo (in real scenario, this would be actual data)
-        ap_status.append(random.choice(['Up', 'Down']))
-    
-    X = np.array(ap_features)
-    y = np.array(ap_status)
-    
-    # Train a simple decision tree
-    clf = DecisionTreeClassifier(random_state=42)
-    clf.fit(X, y)
-    
-    return clf
-
-# Initialize predictor
-predictor_model = create_simple_predictor()
-
 @app.post("/predict")
 def predict_ap_status(features: dict):
     """
-    Predict AP status based on features
-    Expected features: height, building_length, espacio_length, lng, lat
+    Predict AP status based on AP metadata.
+    The current dataset does not include real labels in the geojson,
+    so we use a rule-based heuristic instead of a random classifier.
     """
     try:
-        feature_list = [
-            features.get('height', 0),
-            features.get('building_length', len(features.get('building', ''))),
-            features.get('espacio_length', len(features.get('espacio', ''))),
-            features.get('lng', 0),
-            features.get('lat', 0)
-        ]
-        
-        X_input = np.array([feature_list])
-        prediction = predictor_model.predict(X_input)[0]
-        confidence = max(predictor_model.predict_proba(X_input)[0])
-        
+        height = float(features.get('height', 0) or 0)
+        building = str(features.get('building', '') or '')
+        espacio = str(features.get('espacio', '') or '')
+        lng = float(features.get('lng', 0) or 0)
+        lat = float(features.get('lat', 0) or 0)
+
+        building_score = 1 if len(building) >= 3 else 0
+        espacio_score = 1 if len(espacio) >= 3 else 0
+        height_score = 1 if height >= 4 else 0
+        location_score = 1 if (UAB_bbox[0] <= lng <= UAB_bbox[2] and UAB_bbox[3] <= lat <= UAB_bbox[1]) else 0
+
+        score = building_score + espacio_score + height_score + location_score
+        prediction = 'Up' if score >= 2 else 'Down'
+        confidence = 0.65 + 0.1 * min(score, 3)
+
         return {
             "prediction": prediction,
-            "confidence": round(float(confidence), 3),
-            "features_used": feature_list
+            "confidence": round(float(min(confidence, 0.99)), 3),
+            "features_used": {
+                "height": height,
+                "building_length": len(building),
+                "espacio_length": len(espacio),
+                "lng": lng,
+                "lat": lat,
+                "score": score,
+            }
         }
     except Exception as e:
         return {"error": str(e)}

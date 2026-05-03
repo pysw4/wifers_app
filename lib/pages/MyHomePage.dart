@@ -13,18 +13,9 @@ class _MyHomePageState extends State<MyHomePage> {
   int currentIndex = 0;
 
   final pages = [
-    
     SettingPage(),
-    
-   
     RecommendPage(),
-
-  
     CandidatePage(),
-    
-    Center(
-        child:Text("NAME it"),
-    ),
   ];
 
   @override
@@ -46,8 +37,8 @@ class _MyHomePageState extends State<MyHomePage> {
         },
         items: [
           BottomNavigationBarItem(
-            icon: Icon(Icons.home),
-            label: "Home",
+            icon: Icon(Icons.settings),
+            label: "Settings",
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.star),
