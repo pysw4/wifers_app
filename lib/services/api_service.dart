@@ -26,7 +26,8 @@ class ApiService {
     final response = await http.get(uri);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-      return data;
+      final recommendList = data['recommend'] as List;
+      return recommendList.map((e) => (e as num).toDouble()).toList();
     } else {
       throw Exception('Request failed, status code: ${response.statusCode}');
     }

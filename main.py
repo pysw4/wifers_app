@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from find_paths import *
 from helper_script import *
+import networkx as nx
+
 app = FastAPI()
 
 UAB_bbox = 2.09491, 41.50736, 2.11543, 41.49505
@@ -13,12 +15,12 @@ aps = add_aps_to_graph(G,path="geolocation_package/data/aps_geolocalizados_wgs84
 def root():
     return {"message": "API is working"}
 
-# @app.get("/recommend/{user}")
-# def recommend(user: str):
-#     return {
-#         "user": user,
-#         "recommendations": ["Movie A", "Movie B", "Movie C"]
-#     }
+@app.get("/recommend/{user}")
+def recommend(user: str):
+    return {
+        "user": user,
+        "recommendations": ["Movie A", "Movie B", "Movie C"]
+    }
 
 @app.get("/candidates/{lat}/{lng}/{radius}")
 def candidates(lng: float, lat: float, radius: int):
@@ -48,4 +50,15 @@ def recommend(lng:float,lat:float,radius:int):
         Aps.append([candidate['lng'],candidate['lat']])
     min_distance = 10000
     return Aps[1]
+
+@app.get("/route/{lat}/{lng}/{dest_lat}/{dest_lng}")
+def route(lng: float, lat: float, dest_lat: float, dest_lng: float):
+    source_node = ox.distance.nearest_nodes(G, lng, lat)
+    dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
+    try:
+        path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
+    except nx.NetworkXNoPath:
+        return {"path": []}
+    path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
+    return {"path": path_coords}
 

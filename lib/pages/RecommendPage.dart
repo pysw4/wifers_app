@@ -22,7 +22,12 @@ class _RecommendPageState extends State<RecommendPage> {
   void initState() {
     super.initState();
     // request to future
-    _recommendFuture = _apiService.fetchRecommend(41.5, 2.115, 1000);
+    // _recommendFuture = _apiService.fetchRecommend(41.5, 2.115, 1000);
+    // type transfer 
+    _recommendFuture = _apiService.fetchRecommend(41.5, 2.115, 1000).then((value) {
+      return value.map((e) => (e as num).toDouble()).toList();
+    });
+
   }
 
   @override
@@ -37,15 +42,16 @@ class _RecommendPageState extends State<RecommendPage> {
               return const CircularProgressIndicator();
             }
             if (snapshot.hasError) {
-              return Text('Error: ${snapshot.error}');
+              return Center(child: Text('Error: ${snapshot.error}'));
             }
             if (!snapshot.hasData) {
               return const Text('no data');
             }
             final list = snapshot.data!;
+            print(list);
             // safely access 
             if (list.length > 1) {
-              return Text('second: ${list[1]}');
+              return Text('second: ${list}');
             } else {
               return const Text('no data');
             }
