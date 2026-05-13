@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 class SettingPage extends StatefulWidget {
   const SettingPage({super.key});
-
   @override
   State<SettingPage> createState() => _SettingPageState();
 }
@@ -21,7 +20,6 @@ class _SettingPageState extends State<SettingPage> {
 
   // distance options
   final List<String> _distanceOptions = ["near (1km)", "middle (2km)", "far (5km)"];
-
 
   @override
   Widget build(BuildContext context) {
