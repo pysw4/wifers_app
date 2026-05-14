@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -181,39 +182,43 @@ def find_ap_near_candidates(G, candidates: list, aps: list, amount=1,c_floor = 1
 
 #======Graph structure functions======#
 
-def add_aps_to_graph(G, path, bbox) -> list:
+def add_aps_to_graph(G, path=None, bbox=None) -> list:
     """
-    This function recieves the Graph (graph), 
-    the path (str) of the geojson with the APs coordinates & data and
-    the bounding box (list) which tells which APs to add (only add them if inside bbox)
-    
-    It will return a (list) of all the APs it has added to be able to mantain reference to them
+    This function receives a Graph, the path to a geojson file with AP coordinates/data,
+    and an optional bounding box. When bbox is provided, only APs inside the bbox are added.
+    When bbox is None, all APs in the geojson file are added.
+
+    Returns a list of all AP node IDs added to the graph.
     """
+    if path is None:
+        path = os.path.join(os.path.dirname(__file__), 'geolocation_package', 'data', 'aps_geolocalizados_wgs84.geojson')
+
     print("\nLoading geolocation data...")
     gdf_geo = gpd.read_file(path)
     print(f"  OK - {len(gdf_geo)} APs with geolocation")
 
+    if bbox is None:
+        minx, miny, maxx, maxy = gdf_geo.total_bounds
+        bbox = [minx, maxy, maxx, miny]
+
     ap_nodes = []
     for _, row in gdf_geo.iterrows():
         point = row.geometry
-
         lon = point.x
         lat = point.y
-
         node_id = row["USER_NOM_A"]
 
-        if (bbox[0] < lon < bbox[2]) and (bbox[-1] < lat < bbox[1]): #added this bc there are some very far away APs
-            # Add the node with the attributes we want
+        if (bbox[0] < lon < bbox[2]) and (bbox[-1] < lat < bbox[1]):
             G.add_node(
                 node_id,
-                x = lon, y = lat,
+                x=lon,
+                y=lat,
                 node_type="ap",
                 height=row["Num_Planta"],
                 building=row["USER_EDIFI"],
-                espacio=row["USER_Espai"]
+                espacio=row["USER_Espai"],
             )
-            ap_nodes.append(node_id)            
-
+            ap_nodes.append(node_id)
 
     print(f"  OK - Added {len(ap_nodes)} nodes to graph")
     return ap_nodes
@@ -1108,7 +1113,14 @@ if __name__ == "__main__":
     for k, v in paths_to_neigh.items():
         print("To reach node", k, ":", v[1], ". The cost is", v[0], sep="  ")
 
-    add_aps_to_graph(G=G)
+    ap_geojson_path = os.path.join(
+        os.path.dirname(__file__),
+        'geolocation_package',
+        'data',
+        'aps_geolocalizados_wgs84.geojson'
+    )
+    ap_nodes = add_aps_to_graph(G, path=ap_geojson_path)
+    print(f"Added {len(ap_nodes)} AP nodes to the graph")
 
 
 

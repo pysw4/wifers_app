@@ -1,18 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
-import 'package:wifers_app/services/api_service.dart';
-import 'package:wifers_app/services/location_service.dart';
-import 'package:url_launcher/url_launcher.dart';
-import 'package:wifers_app/models/ap_info.dart';
+
 import 'package:wifers_app/pages/MyHomePage.dart';
-
-
-
 void main() {
   runApp(const MyApp());
 }
-
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
   @override
@@ -20,7 +11,12 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Flutter Demo',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.pink),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        bottomNavigationBarTheme: BottomNavigationBarThemeData(
+          backgroundColor: Colors.white,
+          selectedItemColor: Colors.blue,
+          unselectedItemColor: Colors.black54,
+        ),
       ),
       home: const MyHomePage(title: 'Wifers Flutter Demo'),
     );

@@ -6,15 +6,23 @@ import joblib
 from pathlib import Path
 import osmnx as ox
 from helper_script import add_aps_to_graph, find_paths_to_candidates, find_qualified_in_range
+import os
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# Global variables for lazy-loaded resources
+G = None
+G_AP_nodes = None
+ml_model = None
+model_path = None
+_initialized = False
+
 UAB_bbox = 41.50736, 41.49505, 2.11543, 2.09491
-# bbox format: (left, bottom, right, top) = (west, south, east, north)
-osm_bbox = (UAB_bbox[3], UAB_bbox[1], UAB_bbox[2], UAB_bbox[0])  # (west, south, east, north)
-G = ox.graph_from_bbox(bbox=osm_bbox, network_type="walk")
-G_AP_nodes = add_aps_to_graph(G, bbox=[UAB_bbox[3], UAB_bbox[0], UAB_bbox[2], UAB_bbox[1]])
-print(f"Loaded graph with {len(G.nodes())} total nodes, {len(G_AP_nodes)} AP nodes added")
 
 MODEL_FEATURES = [
     'client_count',
@@ -32,12 +40,30 @@ BASE_DIR = Path(__file__).resolve().parent
 PRIMARY_MODEL_PATH = BASE_DIR / 'models' / MODEL_FILE_NAME
 FALLBACK_MODEL_PATH = Path.cwd() / 'models' / MODEL_FILE_NAME
 
-ml_model = None
-model_path = None
+
+def init_graph(force: bool = False):
+    """Initialize the OSM graph and AP nodes (lazy-loaded)."""
+    global G, G_AP_nodes
+    if G is not None and not force:
+        return G, G_AP_nodes
+
+    logger.info("Loading OSM graph for UAB area...")
+    # bbox format: (left, bottom, right, top) = (west, south, east, north)
+    osm_bbox = (UAB_bbox[3], UAB_bbox[1], UAB_bbox[2], UAB_bbox[0])
+    G = ox.graph_from_bbox(bbox=osm_bbox, network_type="walk")
+    
+    logger.info("Adding AP nodes to graph...")
+    G_AP_nodes = add_aps_to_graph(G, bbox=[UAB_bbox[3], UAB_bbox[0], UAB_bbox[2], UAB_bbox[1]])
+    logger.info(f"Loaded graph with {len(G.nodes())} total nodes, {len(G_AP_nodes)} AP nodes added")
+    return G, G_AP_nodes
 
 
-def load_ml_model():
+def load_ml_model(force: bool = False):
+    """Load the ML model (lazy-loaded)."""
     global ml_model, model_path
+    if ml_model is not None and not force:
+        return ml_model, model_path
+
     candidates = [PRIMARY_MODEL_PATH, FALLBACK_MODEL_PATH]
     model_dir = BASE_DIR / 'models'
     if not any(candidate.exists() for candidate in candidates) and model_dir.exists():
@@ -48,13 +74,38 @@ def load_ml_model():
             try:
                 ml_model = joblib.load(candidate)
                 model_path = candidate
-                print(f"Loaded ML model from {candidate}")
-                return
+                logger.info(f"Loaded ML model from {candidate}")
+                return ml_model, model_path
             except Exception as e:
-                print(f"Failed to load ML model from {candidate}: {e}")
+                logger.warning(f"Failed to load ML model from {candidate}: {e}")
 
     model_path = PRIMARY_MODEL_PATH
-    raise RuntimeError(f"ML model not found. Tried: {', '.join(str(p) for p in candidates)}")
+    error_msg = f"ML model not found. Tried: {', '.join(str(p) for p in candidates)}"
+    logger.error(error_msg)
+    raise RuntimeError(error_msg)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize heavy resources on application startup."""
+    global _initialized
+    try:
+        logger.info("Initializing application resources...")
+        # Load ML model (lightweight, should succeed)
+        load_ml_model()
+        logger.info("ML model loaded successfully")
+        
+        # Load graph (heavy, may time out - but we catch errors gracefully)
+        try:
+            init_graph()
+            _initialized = True
+        except Exception as e:
+            logger.error(f"Failed to load graph: {e}")
+            logger.warning("Graph routing will be unavailable until graph is loaded")
+            _initialized = False
+    except Exception as e:
+        logger.error(f"Startup initialization failed: {e}")
+        _initialized = False
 
 
 def _build_feature_dataframe(features: dict) -> pd.DataFrame:
@@ -99,18 +150,40 @@ def _up_probability_from_proba(proba: np.ndarray) -> float:
     return float(max(proba))
 
 
-load_ml_model()
-
 @app.get("/")
 def root():
-    return {"message": "API is working", "model_path": str(model_path)}
+    return {
+        "message": "API is working",
+        "model_path": str(model_path),
+        "graph_loaded": G is not None,
+        "initialized": _initialized
+    }
+
 
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
+    """Health check endpoint for Render."""
+    return {"status": "ok", "initialized": _initialized}
+
+
+@app.get("/status")
+async def full_status():
+    """Detailed status endpoint for debugging."""
+    return {
+        "status": "ok",
+        "initialized": _initialized,
+        "graph_loaded": G is not None,
+        "graph_nodes": len(G.nodes()) if G is not None else 0,
+        "model_loaded": ml_model is not None,
+        "model_path": str(model_path) if model_path else None,
+        "ap_nodes_count": len(G_AP_nodes) if G_AP_nodes is not None else 0,
+    }
+
 
 @app.post("/predict/batch")
 def predict_ap_status_batch(items: list[dict]):
+    if not ml_model:
+        raise HTTPException(status_code=503, detail="ML model not loaded yet")
     if not items:
         raise HTTPException(status_code=422, detail="No candidate items provided for batch prediction.")
 
@@ -131,6 +204,7 @@ def predict_ap_status_batch(items: list[dict]):
 
     return {'predictions': predictions, 'count': len(predictions)}
 
+
 @app.get("/recommend/{lat}/{lng}/{radius}/{min_range}/{max_range}")
 def recommend(lng: float, lat: float, radius: int, min_range: float, max_range: float):
     return {
@@ -140,8 +214,12 @@ def recommend(lng: float, lat: float, radius: int, min_range: float, max_range: 
         "range": {"min": min_range, "max": max_range}
     }
 
+
 @app.get("/route/{lat}/{lng}/{dest_lat}/{dest_lng}")
 def route(lng: float, lat: float, dest_lat: float, dest_lng: float):
+    if G is None:
+        raise HTTPException(status_code=503, detail="Graph not loaded yet. Try again in a few seconds.")
+    
     source_node = ox.distance.nearest_nodes(G, lng, lat)
     dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
     try:
@@ -151,6 +229,7 @@ def route(lng: float, lat: float, dest_lat: float, dest_lng: float):
     path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
     return {"path": path_coords}
 
+
 @app.get("/route/advanced/{lat}/{lng}/{dest_lat}/{dest_lng}")
 def advanced_route(lng: float, lat: float, dest_lat: float, dest_lng: float, acceptable_range: int = 500):
     """
@@ -158,14 +237,17 @@ def advanced_route(lng: float, lat: float, dest_lat: float, dest_lng: float, acc
     Finds multiple candidate paths within an acceptable range of the destination.
     Returns the best path along with alternative options.
     """
+    if G is None:
+        raise HTTPException(status_code=503, detail="Graph not loaded yet. Try again in a few seconds.")
+
     try:
         source_node = ox.distance.nearest_nodes(G, lng, lat)
         dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
         
         # Find qualified nodes within acceptable range of destination
         qualified_candidates = find_qualified_in_range(
-            G=G,
-            original_target=dest_node,
+            G=G, 
+            original_target=dest_node, 
             acceptable_range=acceptable_range
         )
         
@@ -232,8 +314,9 @@ def advanced_route(lng: float, lat: float, dest_lat: float, dest_lng: float, acc
                 "alternatives": [],
                 "message": f"Error in advanced routing, using fallback: {str(e)}"
             }
-        except:
+        except Exception:
             return {"path": [], "alternatives": [], "message": f"Routing failed: {str(e)}"}
+
 
 @app.post("/predict")
 def predict_ap_status(features: dict):
@@ -242,6 +325,9 @@ def predict_ap_status(features: dict):
     Required features: client_count, cpu_utilization, mem_free, mem_total,
                        last_modified, hour, mem_usage, overloaded
     """
+    if not ml_model:
+        raise HTTPException(status_code=503, detail="ML model not loaded yet")
+    
     df = _build_feature_dataframe(features)
     prediction = ml_model.predict(df)[0]
     prediction_proba = ml_model.predict_proba(df)[0]
@@ -257,7 +343,8 @@ def predict_ap_status(features: dict):
         "features_used": features
     }
 
+
 if __name__ == "__main__":
     import uvicorn
+    # Run with more workers for production
     uvicorn.run(app, host="0.0.0.0", port=8000)
-

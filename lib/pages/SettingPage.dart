@@ -1,25 +1,66 @@
 import 'package:flutter/material.dart';
+import 'package:wifers_app/services/storage_service.dart';
 
 class SettingPage extends StatefulWidget {
   const SettingPage({super.key});
+
   @override
   State<SettingPage> createState() => _SettingPageState();
 }
 
 class _SettingPageState extends State<SettingPage> {
-  // range 
-  double _currentMin = 20.0;
-  double _currentMax = 80.0;
-  final double _minRange = 0.0;
-  final double _maxRange = 100.0;
-
-  // other state
   bool _notificationsEnabled = true;
-  String _selectedDistance = "middle 2km";
-  String _selectedGender = "no limits";
+  bool _cachePredictions = true;
+  bool _lowPowerLocation = true;
+  bool _preferStableAps = true;
+  int _cacheDurationMinutes = 60;
+  int _recommendRadiusMeters = 500;
 
-  // distance options
-  final List<String> _distanceOptions = ["near (1km)", "middle (2km)", "far (5km)"];
+  final List<int> _cacheDurations = [15, 60, 240];
+  final Map<int, String> _cacheDurationLabels = {
+    15: '15 min',
+    60: '1 hour',
+    240: '4 hours',
+  };
+  final List<int> _recommendRadiusOptions = [200, 500, 800, 1000, 5000];
+  final Map<int, String> _recommendRadiusLabels = {
+    200: '200 m',
+    500: '500 m',
+    800: '800 m',
+    1000: '1 km',
+    5000: '5 km',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final settings = await StorageService.loadSettings();
+    setState(() {
+      _notificationsEnabled = settings['notificationsEnabled'] ?? true;
+      _cachePredictions = settings['cachePredictions'] ?? true;
+      _cacheDurationMinutes = settings['cacheDurationMinutes'] ?? 60;
+      _lowPowerLocation = settings['lowPowerLocation'] ?? true;
+      _preferStableAps = settings['preferStableAps'] ?? true;
+      _recommendRadiusMeters = settings['recommendRadiusMeters'] ?? 500;
+    });
+  }
+
+  Future<void> _saveSettings() async {
+    final settings = {
+      'notificationsEnabled': _notificationsEnabled,
+      'cachePredictions': _cachePredictions,
+      'cacheDurationMinutes': _cacheDurationMinutes,
+      'lowPowerLocation': _lowPowerLocation,
+      'preferStableAps': _preferStableAps,
+      'recommendRadiusMeters': _recommendRadiusMeters,
+    };
+    await StorageService.saveSettings(settings);
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -31,7 +72,6 @@ class _SettingPageState extends State<SettingPage> {
       body: ListView(
         padding: const EdgeInsets.all(16.0),
         children: [
-          // ===== （RangeSlider）=====
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16.0),
@@ -39,33 +79,46 @@ class _SettingPageState extends State<SettingPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    "acceptable range",
+                    "Prediction Settings",
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
-                  RangeSlider(
-                    values: RangeValues(_currentMin, _currentMax),
-                    min: _minRange,
-                    max: _maxRange,
-                    divisions: 100,
-                    labels: RangeLabels(
-                      "${_currentMin.round()}",
-                      "${_currentMax.round()}",
+                  SwitchListTile(
+                    title: const Text('Cache prediction results'),
+                    subtitle: const Text('Reuse recent model predictions for faster response'),
+                    value: _cachePredictions,
+                    onChanged: (bool value) {
+                      setState(() {
+                        _cachePredictions = value;
+                      });
+                      _saveSettings();
+                    },
+                    secondary: const Icon(Icons.memory),
+                  ),
+                  const SizedBox(height: 12),
+                  ListTile(
+                    leading: const Icon(Icons.timer),
+                    title: const Text('Cache duration'),
+                    subtitle: Text(_cacheDurationLabels[_cacheDurationMinutes] ?? '1 hour'),
+                    trailing: DropdownButton<int>(
+                      value: _cacheDurationMinutes,
+                      items: _cacheDurations
+                          .map((minutes) => DropdownMenuItem(
+                                value: minutes,
+                                child: Text(_cacheDurationLabels[minutes]!),
+                              ))
+                          .toList(),
+                      onChanged: _cachePredictions
+                          ? (int? value) {
+                              if (value != null) {
+                                setState(() {
+                                  _cacheDurationMinutes = value;
+                                });
+                                _saveSettings();
+                              }
+                            }
+                          : null,
                     ),
-                    onChanged: (RangeValues values) {
-                      setState(() {
-                        _currentMin = values.start;
-                        _currentMax = values.end;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text("min: ${_currentMin.round()*20} meters"),
-                      Text("max: ${_currentMax.round() *20} meters"),
-                    ],
                   ),
                 ],
               ),
@@ -74,8 +127,6 @@ class _SettingPageState extends State<SettingPage> {
 
           const SizedBox(height: 16),
 
-
-          // 1. range choice
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16.0),
@@ -83,20 +134,44 @@ class _SettingPageState extends State<SettingPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    "Searching range",
+                    'Recommendation Preferences',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 12),
-                  SegmentedButton<String>(
-                    segments: _distanceOptions
-                        .map((option) => ButtonSegment(value: option, label: Text(option)))
-                        .toList(),
-                    selected: {_selectedDistance},
-                    onSelectionChanged: (Set<String> newSelection) {
+                  SwitchListTile(
+                    title: const Text('Prefer stable APs'),
+                    subtitle: const Text('Rank APs with predicted Up status higher'),
+                    value: _preferStableAps,
+                    onChanged: (bool value) {
                       setState(() {
-                        _selectedDistance = newSelection.first;
+                        _preferStableAps = value;
                       });
+                      _saveSettings();
                     },
+                    secondary: const Icon(Icons.thumb_up),
+                  ),
+                  const SizedBox(height: 12),
+                  ListTile(
+                    leading: const Icon(Icons.map),
+                    title: const Text('Recommendation radius'),
+                    subtitle: Text(_recommendRadiusLabels[_recommendRadiusMeters] ?? '500 m'),
+                    trailing: DropdownButton<int>(
+                      value: _recommendRadiusMeters,
+                      items: _recommendRadiusOptions
+                          .map((meters) => DropdownMenuItem(
+                                value: meters,
+                                child: Text(_recommendRadiusLabels[meters]!),
+                              ))
+                          .toList(),
+                      onChanged: (int? value) {
+                        if (value != null) {
+                          setState(() {
+                            _recommendRadiusMeters = value;
+                          });
+                          _saveSettings();
+                        }
+                      },
+                    ),
                   ),
                 ],
               ),
@@ -105,44 +180,80 @@ class _SettingPageState extends State<SettingPage> {
 
           const SizedBox(height: 16),
 
-
-          const SizedBox(height: 16),
-
-          // notification button
           Card(
-            child: SwitchListTile(
-              title: const Text(
-                "Receive notifications",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              subtitle: const Text(" open to receive notifications"),
-              value: _notificationsEnabled,
-              onChanged: (bool value) {
-                setState(() {
-                  _notificationsEnabled = value;
-                });
-              },
-              secondary: const Icon(Icons.notifications_active),
+            child: Column(
+              children: [
+                SwitchListTile(
+                  title: const Text('Low-power location mode'),
+                  subtitle: const Text('Reduce background location checks for better battery life'),
+                  value: _lowPowerLocation,
+                  onChanged: (bool value) {
+                    setState(() {
+                      _lowPowerLocation = value;
+                    });
+                    _saveSettings();
+                  },
+                  secondary: const Icon(Icons.battery_saver),
+                ),
+                const Divider(height: 1),
+                SwitchListTile(
+                  title: const Text('Receive notifications'),
+                  subtitle: const Text('Enable status alerts and results updates'),
+                  value: _notificationsEnabled,
+                  onChanged: (bool value) {
+                    setState(() {
+                      _notificationsEnabled = value;
+                    });
+                    _saveSettings();
+                  },
+                  secondary: const Icon(Icons.notifications_active),
+                ),
+              ],
             ),
           ),
 
           const SizedBox(height: 16),
 
-          // 4. clear 
           Card(
-            child: ListTile(
-              leading: const Icon(Icons.clear_all),
-              title: const Text(
-                "Clear data",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              subtitle: const Text("clear local data"),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text("data cleared")),
-                );
-              },
+            child: Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.delete_forever),
+                  title: const Text(
+                    'Clear cached data',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: const Text('Remove locally stored prediction and location cache'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    await StorageService.clearCache();
+                    if (!mounted) return;
+                    messenger.showSnackBar(
+                      const SnackBar(content: Text('Cached data cleared')),
+                    );
+                  },
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  leading: const Icon(Icons.refresh),
+                  title: const Text(
+                    'Reset settings',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: const Text('Restore default app preferences'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () async {
+                    final messenger = ScaffoldMessenger.of(context);
+                    await StorageService.resetSettings();
+                    await _loadSettings();
+                    if (!mounted) return;
+                    messenger.showSnackBar(
+                      const SnackBar(content: Text('Settings reset to defaults')),
+                    );
+                  },
+                ),
+              ],
             ),
           ),
         ],

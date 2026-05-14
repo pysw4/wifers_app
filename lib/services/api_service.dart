@@ -1,35 +1,72 @@
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:wifers_app/models/ap_info.dart';
+import 'package:latlong2/latlong.dart';
 
 class ApiService {
-  // your backend API base URL (ensure this matches your backend's IP and port)
+  //  backend API base URL (ensure this matches your backend's IP and port)
   static const String baseUrl = 'https://wifers-app.onrender.com';
 
-  /// get candidates from the backend API
-  Future<List<APInfo>> fetchCandidates(double lng, double lat, int radius) async {
-    final uri = Uri.parse('$baseUrl/candidates/$lng/$lat/$radius');
-    print('requesting: $uri');
+  Future<List<LatLng>> fetchRoute(double lng, double lat, double destLng, double destLat) async {
+    final uri = Uri.parse('$baseUrl/route/$lat/$lng/$destLat/$destLng');
     final response = await http.get(uri);
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
-      final candidatesRaw = data['candidates'] as List;
-      // get list of candidates from the response
-      return candidatesRaw.map((item) => APInfo.fromJson(item)).toList();
+      final path = data['path'] as List<dynamic>;
+      return path.map<LatLng>((item) {
+        final map = item as Map<String, dynamic>;
+        final lat = map['lat'];
+        final lng = map['lng'];
+        return LatLng((lat as num).toDouble(), (lng as num).toDouble());
+      }).toList();
     } else {
       throw Exception('Request failed, status code: ${response.statusCode}');
     }
   }
-  Future<List<double>> fetchRecommend(double lng, double lat, int radius) async {
-    final uri = Uri.parse('$baseUrl/recommend/$lat/$lng/$radius');
-    print('requesting: $uri');
+
+  Future<Map<String, dynamic>> predictAPStatus(Map<String, dynamic> features) async {
+    final uri = Uri.parse('$baseUrl/predict');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(features),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } else {
+      throw Exception('Request failed, status code: ${response.statusCode}');
+    }
+  }
+
+  Future<Map<String, dynamic>> predictAPStatusBatch(List<Map<String, dynamic>> items) async {
+    final uri = Uri.parse('$baseUrl/predict/batch');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode(items),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } else {
+      throw Exception('Request failed, status code: ${response.statusCode}');
+    }
+  }
+
+  /// Advanced route with alternatives using find_paths_to_candidates
+  /// Returns best path and alternative routes within acceptable range
+  Future<Map<String, dynamic>> fetchAdvancedRoute(
+    double lng,
+    double lat,
+    double destLng,
+    double destLat, {
+    int acceptableRange = 500,
+  }) async {
+    final uri = Uri.parse('$baseUrl/route/advanced/$lat/$lng/$destLat/$destLng?acceptable_range=$acceptableRange');
     final response = await http.get(uri);
     if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final recommendList = data['recommend'] as List;
-      return recommendList.map((e) => (e as num).toDouble()).toList();
+      return jsonDecode(response.body) as Map<String, dynamic>;
     } else {
       throw Exception('Request failed, status code: ${response.statusCode}');
     }
   }
 }
+

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:wifers_app/pages/CandidatePage.dart';
+import 'package:wifers_app/pages/map_page.dart';
 import 'package:wifers_app/pages/RecommendPage.dart';
 import 'package:wifers_app/pages/SettingPage.dart';
 
@@ -15,7 +15,7 @@ class _MyHomePageState extends State<MyHomePage> {
   final pages = [
     SettingPage(),
     RecommendPage(),
-    CandidatePage(),
+    const MapPage(),
   ];
 
   @override
@@ -29,10 +29,15 @@ class _MyHomePageState extends State<MyHomePage> {
       body: pages[currentIndex],
 
        bottomNavigationBar: BottomNavigationBar(
+        type: BottomNavigationBarType.fixed,
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        selectedItemColor: Theme.of(context).colorScheme.primary,
+        unselectedItemColor: Theme.of(context).colorScheme.onSurface.withAlpha(179),
+        showUnselectedLabels: true,
         currentIndex: currentIndex,
         onTap: (index) {
           setState(() {
-            currentIndex = index;  
+            currentIndex = index;
           });
         },
         items: [
@@ -41,11 +46,11 @@ class _MyHomePageState extends State<MyHomePage> {
             label: "Settings",
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.star),
+            icon: Icon(Icons.recommend),
             label: "Recommend",
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.search),
+            icon: Icon(Icons.map),
             label: "Map",
           ),
         ],

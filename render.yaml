@@ -3,5 +3,24 @@ services:
     name: wifers_app
     runtime: python
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT"
-    plan: free 
+    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT --log-level info"
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: PYTHONUNBUFFERED
+        value: "1"
+    # Allow more time for heavy initialization (graph loading)
+    # Free plan has 60s startup timeout, increase if needed
+    buildFilter:
+      ignoredPaths:
+        - test/
+        - lib/
+        - android/
+        - ios/
+        - windows/
+        - linux/
+        - macos/
+        - web/
+        - build/

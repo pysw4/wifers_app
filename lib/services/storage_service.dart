@@ -4,8 +4,9 @@ import '../models/ap_info.dart';
 
 class StorageService {
   static const String _favoritesKey = 'favorite_aps';
+  static const String _settingsKey = 'app_settings';
 
-  // 保存收藏列表
+  // Save favorites list
   static Future<void> saveFavorites(List<APInfo> favorites) async {
     final prefs = await SharedPreferences.getInstance();
     final List<Map<String, dynamic>> jsonList = favorites.map((ap) => ap.toJson()).toList();
@@ -13,7 +14,7 @@ class StorageService {
     await prefs.setString(_favoritesKey, encoded);
   }
 
-  // 读取收藏列表
+  // Load favorites list
   static Future<List<APInfo>> loadFavorites() async {
     final prefs = await SharedPreferences.getInstance();
     final String? encoded = prefs.getString(_favoritesKey);
@@ -22,26 +23,67 @@ class StorageService {
     return decoded.map((item) => APInfo.fromJson(item as Map<String, dynamic>)).toList();
   }
 
-  // 添加单个收藏（可去重）
+  // Add single favorite (with deduplication)
   static Future<void> addFavorite(APInfo ap) async {
     final favorites = await loadFavorites();
-    // 根据 uniqueKey 去重
+    // Deduplicate by uniqueKey
     if (!favorites.any((item) => item.uniqueKey == ap.uniqueKey)) {
       favorites.add(ap);
       await saveFavorites(favorites);
     }
   }
 
-  // 删除单个收藏
+  // Remove a single favorite
   static Future<void> removeFavorite(APInfo ap) async {
     final favorites = await loadFavorites();
     favorites.removeWhere((item) => item.uniqueKey == ap.uniqueKey);
     await saveFavorites(favorites);
   }
 
-  // 清空收藏
+  // Clear all favorites
   static Future<void> clearFavorites() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_favoritesKey);
+  }
+
+  // Save settings
+  static Future<void> saveSettings(Map<String, dynamic> settings) async {
+    final prefs = await SharedPreferences.getInstance();
+    final String encoded = jsonEncode(settings);
+    await prefs.setString(_settingsKey, encoded);
+  }
+
+  // Load settings
+  static Future<Map<String, dynamic>> loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final String? encoded = prefs.getString(_settingsKey);
+    if (encoded == null) {
+      // Default settings
+      return {
+        'notificationsEnabled': true,
+        'cachePredictions': true,
+        'cacheDurationMinutes': 60,
+        'lowPowerLocation': true,
+        'preferStableAps': true,
+        'recommendRadiusMeters': 500,
+      };
+    }
+    return jsonDecode(encoded) as Map<String, dynamic>;
+  }
+
+  static Future<void> clearCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('ap_cache');
+    await prefs.remove('ap_cache_time');
+    await prefs.remove('cached_lat');
+    await prefs.remove('cached_lng');
+    await prefs.remove('recommend_cache');
+    await prefs.remove('recommend_cache_time');
+    await prefs.remove('recommend_params');
+  }
+
+  static Future<void> resetSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_settingsKey);
   }
 }
