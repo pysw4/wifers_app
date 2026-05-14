@@ -1,156 +1,121 @@
-from fastapi import FastAPI
-from find_paths import *
-from helper_script import *
+from fastapi import FastAPI, HTTPException
 import networkx as nx
 import pandas as pd
 import numpy as np
 import joblib
-import os
+from pathlib import Path
+import osmnx as ox
+from helper_script import add_aps_to_graph
 
 app = FastAPI()
 
-UAB_bbox = 2.09491, 41.50736, 2.11543, 41.49505
-G = ox.graph_from_bbox(UAB_bbox, network_type="walk")
-aps = add_aps_to_graph(G,path="geolocation_package/data/aps_geolocalizados_wgs84.geojson",bbox=UAB_bbox)
-# print(G.nodes[aps[0]].keys())       #   aps node :'x' 'y' 'node_type' 'height', 'building' 'espacio' etc.key
-# print(G.nodes[1493656218].keys()) # normal road point keys : only 'x' 'y' 'street_count'
+UAB_bbox = 41.50736, 41.49505, 2.11543, 2.09491
+# bbox format: (left, bottom, right, top) = (west, south, east, north)
+osm_bbox = (UAB_bbox[3], UAB_bbox[1], UAB_bbox[2], UAB_bbox[0])  # (west, south, east, north)
+G = ox.graph_from_bbox(bbox=osm_bbox, network_type="walk")
+G_AP_nodes = add_aps_to_graph(G, bbox=[UAB_bbox[3], UAB_bbox[0], UAB_bbox[2], UAB_bbox[1]])
+print(f"Loaded graph with {len(G.nodes())} total nodes, {len(G_AP_nodes)} AP nodes added")
 
-# Load the trained ML model
-model_path = os.path.join(os.path.dirname(__file__), 'models', 'decision_tree.joblib')
-ml_model = joblib.load(model_path) if os.path.exists(model_path) else None
+MODEL_FEATURES = [
+    'client_count',
+    'cpu_utilization',
+    'mem_free',
+    'mem_total',
+    'last_modified',
+    'hour',
+    'mem_usage',
+    'overloaded'
+]
+
+MODEL_FILE_NAME = 'decision_tree.joblib'
+BASE_DIR = Path(__file__).resolve().parent
+PRIMARY_MODEL_PATH = BASE_DIR / 'models' / MODEL_FILE_NAME
+FALLBACK_MODEL_PATH = Path.cwd() / 'models' / MODEL_FILE_NAME
+
+ml_model = None
+model_path = None
+
+
+def load_ml_model():
+    global ml_model, model_path
+    candidates = [PRIMARY_MODEL_PATH, FALLBACK_MODEL_PATH]
+    model_dir = BASE_DIR / 'models'
+    if not any(candidate.exists() for candidate in candidates) and model_dir.exists():
+        candidates.extend(sorted(model_dir.glob('*.joblib')))
+
+    for candidate in candidates:
+        if candidate.exists():
+            try:
+                ml_model = joblib.load(candidate)
+                model_path = candidate
+                print(f"Loaded ML model from {candidate}")
+                return
+            except Exception as e:
+                print(f"Failed to load ML model from {candidate}: {e}")
+
+    model_path = PRIMARY_MODEL_PATH
+    raise RuntimeError(f"ML model not found. Tried: {', '.join(str(p) for p in candidates)}")
+
+
+def _build_feature_dataframe(features: dict) -> pd.DataFrame:
+    missing_features = [feat for feat in MODEL_FEATURES if feat not in features]
+    if missing_features:
+        raise HTTPException(status_code=422, detail=f"Missing required feature(s): {', '.join(missing_features)}")
+
+    converted = []
+    for feat in MODEL_FEATURES:
+        value = features[feat]
+        if isinstance(value, bool):
+            converted.append(int(value))
+            continue
+        if isinstance(value, (int, float)):
+            converted.append(float(value))
+            continue
+        if isinstance(value, str):
+            try:
+                converted.append(float(value))
+                continue
+            except ValueError:
+                raise HTTPException(status_code=422, detail=f"Invalid feature value for '{feat}': cannot convert '{value}' to float")
+        raise HTTPException(status_code=422, detail=f"Invalid feature type for '{feat}': {type(value).__name__}")
+
+    return pd.DataFrame([converted], columns=MODEL_FEATURES)
+
+
+load_ml_model()
 
 @app.get("/")
 def root():
-    return {"message": "API is working"}
+    return {"message": "API is working", "model_path": str(model_path)}
 
-@app.get("/candidates/{lat}/{lng}/{radius}")
-def candidates(lng: float, lat: float, radius: int):
-    nearest_node = ox.distance.nearest_nodes(G, lng, lat)
-    candidates = find_qualified_in_range(G=G, original_target=nearest_node, acceptable_range=radius)
-    aps_near_candidates_pairs = find_ap_near_candidates(G = G,candidates = candidates,aps = aps, amount = 5,c_floor = 1)
-    candi_info = []
-    for pair in aps_near_candidates_pairs:
-        for ap in pair[1]:
-            candi_info.append({
-                "lng": G.nodes[ap]['x'],
-                "lat": G.nodes[ap]['y'],
-                "building": G.nodes[ap]['building'],
-                "height": G.nodes[ap]['height'],
-                "espacio": G.nodes[ap]['espacio']
-    })
-            # candidates_information.append([x,y,building,height,espacio])
-    return {"candidates":candi_info}
+@app.post("/predict/batch")
+def predict_ap_status_batch(items: list[dict]):
+    if not items:
+        raise HTTPException(status_code=422, detail="No candidate items provided for batch prediction.")
+
+    predictions = []
+    for item in items:
+        features = item.get('features') if isinstance(item, dict) and 'features' in item else item
+        df = _build_feature_dataframe(features)
+        prediction = ml_model.predict(df)[0]
+        probability = ml_model.predict_proba(df)[0]
+        predictions.append({
+            'input': features,
+            'prediction': 'Up' if prediction == 1 else 'Down',
+            'confidence': round(float(max(probability)), 3),
+            'score': round(float(np.max(probability)), 3)
+        })
+
+    return {'predictions': predictions, 'count': len(predictions)}
 
 @app.get("/recommend/{lat}/{lng}/{radius}/{min_range}/{max_range}")
-def recommend(lng:float,lat:float,radius:int,min_range:float,max_range:float):
-    """
-    Recommend best APs based on weighted scoring.
-    Scoring factors: proximity to user, AP status prediction confidence, distance within range.
-    Returns ranked list of APs with scores.
-    """
-    try:
-        source_node = ox.distance.nearest_nodes(G, lng, lat)
-        source_coords = (G.nodes[source_node]['y'], G.nodes[source_node]['x'])
-        
-        # Get candidates from /candidates endpoint
-        _candidates = candidates(lng, lat, radius)
-        candi_info = _candidates["candidates"]
-        
-        if not candi_info:
-            return {"recommended_aps": [], "message": "No candidates found in radius"}
-        
-        # Calculate scores for each AP based on:
-        # - Distance from user (normalized, prefer closer)
-        # - ML model prediction confidence (prefer "Up" with high confidence)
-        # - Distance constraints (must be within min_range and max_range)
-        ap_scores = []
-        
-        for ap in candi_info:
-            ap_coords = (ap['lat'], ap['lng'])
-            
-            # Haversine distance approximation (in meters, simplified)
-            lat_diff = (ap_coords[0] - source_coords[0]) * 111000
-            lng_diff = (ap_coords[1] - source_coords[1]) * 111000 * np.cos(np.radians(source_coords[0]))
-            distance = np.sqrt(lat_diff**2 + lng_diff**2)
-            
-            # Check if within range constraints
-            if distance < min_range or distance > max_range:
-                continue
-            
-            # Predict AP status using ML model
-            try:
-                # Use default/mock features for prediction if not available in geojson
-                # In production, these should come from real AP metadata
-                features = {
-                    'client_count': 5,  # mock value
-                    'cpu_utilization': 50.0,
-                    'mem_free': 2048,
-                    'mem_total': 8192,
-                    'last_modified': 1234567890,
-                    'hour': 14,
-                    'mem_usage': 4096,
-                    'overloaded': 0
-                }
-                
-                if ml_model:
-                    X = pd.DataFrame([list(features.values())], columns=list(features.keys()))
-                    pred = ml_model.predict(X)[0]
-                    proba = ml_model.predict_proba(X)[0]
-                    status_confidence = float(max(proba))
-                    status = 'Up' if pred == 1 else 'Down'
-                else:
-                    status = 'Unknown'
-                    status_confidence = 0.5
-            except:
-                status = 'Unknown'
-                status_confidence = 0.5
-            
-            # Weighted scoring:
-            # - Proximity score (normalized, 0-1, inverse distance)
-            # - Status confidence (0-1, prefer "Up")
-            # - Building/location quality (0-1, prefer descriptive metadata)
-            proximity_score = max(0, 1 - (distance / max_range))
-            building_quality = 1.0 if len(str(ap.get('building', ''))) >= 3 else 0.5
-            espacio_quality = 1.0 if len(str(ap.get('espacio', ''))) >= 3 else 0.5
-            
-            # Weighted combination (adjust weights as needed)
-            weights = {
-                'proximity': 0.4,
-                'status_confidence': 0.35,
-                'location_quality': 0.25
-            }
-            
-            location_quality = (building_quality + espacio_quality) / 2
-            total_score = (
-                weights['proximity'] * proximity_score +
-                weights['status_confidence'] * status_confidence +
-                weights['location_quality'] * location_quality
-            )
-            
-            ap_scores.append({
-                'lng': ap['lng'],
-                'lat': ap['lat'],
-                'building': ap['building'],
-                'height': ap['height'],
-                'espacio': ap['espacio'],
-                'distance_meters': round(distance, 2),
-                'ap_status': status,
-                'status_confidence': round(status_confidence, 3),
-                'total_score': round(total_score, 3)
-            })
-        
-        # Sort by total score descending
-        ap_scores.sort(key=lambda x: x['total_score'], reverse=True)
-        
-        return {
-            "recommended_aps": ap_scores,
-            "count": len(ap_scores),
-            "user_location": {"lat": lat, "lng": lng},
-            "range_constraints": {"min": min_range, "max": max_range}
-        }
-    
-    except Exception as e:
-        return {"error": str(e)}
+def recommend(lng: float, lat: float, radius: int, min_range: float, max_range: float):
+    return {
+        "message": "Historical AP candidate recommendation is disabled. Use /predict or /predict/batch with current AP feature vectors.",
+        "current_location": {"lat": lat, "lng": lng},
+        "radius": radius,
+        "range": {"min": min_range, "max": max_range}
+    }
 
 @app.get("/route/{lat}/{lng}/{dest_lat}/{dest_lng}")
 def route(lng: float, lat: float, dest_lat: float, dest_lng: float):
@@ -167,41 +132,21 @@ def route(lng: float, lat: float, dest_lat: float, dest_lng: float):
 def predict_ap_status(features: dict):
     """
     Predict AP status using the trained Decision Tree ML model.
-    Required features: client_count, cpu_utilization, mem_free, mem_total, 
+    Required features: client_count, cpu_utilization, mem_free, mem_total,
                        last_modified, hour, mem_usage, overloaded
     """
-    try:
-        if ml_model is None:
-            return {"error": "ML model not loaded. Please ensure models/decision_tree.joblib exists."}
-        
-        # Extract required features
-        required_features = ['client_count', 'cpu_utilization', 'mem_free', 'mem_total',
-                           'last_modified', 'hour', 'mem_usage', 'overloaded']
-        
-        feature_values = []
-        for feat in required_features:
-            value = features.get(feat)
-            if value is None:
-                return {"error": f"Missing required feature: {feat}"}
-            feature_values.append(float(value))
-        
-        # Make prediction
-        X = pd.DataFrame([feature_values], columns=required_features)
-        prediction = ml_model.predict(X)[0]
-        prediction_proba = ml_model.predict_proba(X)[0]
-        
-        # Map prediction to string
-        pred_label = 'Up' if prediction == 1 else 'Down'
-        confidence = float(max(prediction_proba))
-        
-        return {
-            "prediction": pred_label,
-            "confidence": round(confidence, 3),
-            "model": "Decision Tree",
-            "features_used": dict(zip(required_features, feature_values))
-        }
-    except Exception as e:
-        return {"error": str(e)}
+    df = _build_feature_dataframe(features)
+    prediction = ml_model.predict(df)[0]
+    prediction_proba = ml_model.predict_proba(df)[0]
+    pred_label = 'Up' if prediction == 1 else 'Down'
+    confidence = float(max(prediction_proba))
+
+    return {
+        "prediction": pred_label,
+        "confidence": round(confidence, 3),
+        "model": "Decision Tree",
+        "features_used": features
+    }
 
 if __name__ == "__main__":
     import uvicorn
