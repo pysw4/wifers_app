@@ -7,6 +7,7 @@ from pathlib import Path
 import osmnx as ox
 from helper_script import add_aps_to_graph, find_paths_to_candidates, find_qualified_in_range
 import os
+import json
 import logging
 
 # Configure logging
@@ -87,15 +88,23 @@ def load_ml_model(force: bool = False):
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize heavy resources on application startup."""
+    """Initialize all resources on application startup."""
     global _initialized
     try:
         logger.info("Initializing application resources...")
-        # Load ML model (lightweight, should succeed)
+        
+        # 1. Load ML model (lightweight, should succeed)
         load_ml_model()
         logger.info("ML model loaded successfully")
         
-        # Load graph (heavy, may time out - but we catch errors gracefully)
+        # 2. Load signal strength model
+        try:
+            load_signal_model()
+            logger.info("Signal strength model loaded successfully")
+        except Exception as e:
+            logger.warning(f"Signal strength model not loaded: {e}")
+        
+        # 3. Load graph (heavy, may time out - but we catch errors gracefully)
         try:
             init_graph()
             _initialized = True
@@ -198,7 +207,7 @@ def predict_ap_status_batch(items: list[dict]):
             'input': features,
             'prediction': 'Up' if prediction == 1 else 'Down',
             'confidence': round(float(max(probability)), 3),
-            'signal_strength': round(up_prob * 100, 1),
+            'up_probability': round(up_prob * 100, 1),
             'score': round(float(np.max(probability)), 3)
         })
 
@@ -246,8 +255,8 @@ def advanced_route(lng: float, lat: float, dest_lat: float, dest_lng: float, acc
         
         # Find qualified nodes within acceptable range of destination
         qualified_candidates = find_qualified_in_range(
-            G=G, 
-            original_target=dest_node, 
+            G=G,
+            original_target=dest_node,
             acceptable_range=acceptable_range
         )
         
@@ -338,10 +347,277 @@ def predict_ap_status(features: dict):
     return {
         "prediction": pred_label,
         "confidence": round(confidence, 3),
-        "signal_strength": round(up_prob * 100, 1),
+        "up_probability": round(up_prob * 100, 1),
         "model": "Decision Tree",
         "features_used": features
     }
+
+
+# ---- Signal Strength Prediction Endpoints ----
+# Predicts REAL signal strength (dBm) based on building, floor, hour, and band
+# Trained on actual signal_db values from clientes_processed.csv
+
+SIGNAL_MODEL_PATH = BASE_DIR / 'models' / 'signal_strength_model.joblib'
+SIGNAL_META_PATH = BASE_DIR / 'models' / 'signal_strength_meta.joblib'
+BUILDING_ENCODER_PATH = BASE_DIR / 'models' / 'building_encoder.joblib'
+_signal_model = None
+_signal_feature_names = None
+_building_encoder = None
+_buildings_list = None
+
+
+def load_signal_model(force: bool = False):
+    """Load the signal strength regression model (lazy-loaded)."""
+    global _signal_model, _signal_feature_names, _building_encoder, _buildings_list
+    if _signal_model is not None and not force:
+        return _signal_model, _signal_feature_names, _building_encoder, _buildings_list
+
+    if not SIGNAL_MODEL_PATH.exists():
+        logger.warning("Signal strength model not found at %s", SIGNAL_MODEL_PATH)
+        return None, None, None, None
+
+    try:
+        _signal_model = joblib.load(SIGNAL_MODEL_PATH)
+        if SIGNAL_META_PATH.exists():
+            meta = joblib.load(SIGNAL_META_PATH)
+            _signal_feature_names = meta.get('feature_names', ['building_code', 'floor', 'hour', 'band'])
+            _buildings_list = meta.get('buildings', [])
+        if BUILDING_ENCODER_PATH.exists():
+            _building_encoder = joblib.load(BUILDING_ENCODER_PATH)
+        logger.info("Loaded signal strength model from %s", SIGNAL_MODEL_PATH)
+        logger.info(f"  Buildings: {len(_buildings_list) if _buildings_list else 0}")
+        return _signal_model, _signal_feature_names, _building_encoder, _buildings_list
+    except Exception as e:
+        logger.error("Failed to load signal strength model: %s", e)
+        return None, None, None, None
+
+
+def _build_signal_features(features: dict) -> pd.DataFrame:
+    """
+    Build feature vector for signal strength prediction.
+    
+    Input features:
+    - building: str (building name, e.g. 'ETSE', 'FAC.DRET', 'BIBLIOTECA HUMANITATS')
+    - floor: int/float (floor number, e.g. 0, 1, 2, -1)
+    - hour: int/float (hour of day, 0-23)
+    - band: int/float (5 for 5GHz, 2.4 for 2.4GHz, default: 5)
+    """
+    global _building_encoder, _buildings_list
+    
+    building_name = str(features.get('building', 'Unknown'))
+    floor = float(features.get('floor', 0) or 0)
+    hour = float(features.get('hour', 12) or 12)
+    band = float(features.get('band', 5.0) or 5.0)
+    
+    # Encode building name
+    building_code = 0  # default fallback
+    if _building_encoder is not None:
+        if building_name in _building_encoder.classes_:
+            building_code = int(_building_encoder.transform([building_name])[0])
+        elif _buildings_list:
+            # Try to find closest match
+            for i, b in enumerate(_buildings_list):
+                if building_name.lower() in b.lower() or b.lower() in building_name.lower():
+                    building_code = i
+                    break
+    
+    signal_features = {
+        'building_code': building_code,
+        'floor': floor,
+        'hour': hour,
+        'band': band,
+    }
+    
+    df = pd.DataFrame([signal_features])
+    return df
+
+
+def _dbm_to_quality_text(dbm: float) -> dict:
+    """Convert dBm value to quality description."""
+    if dbm >= -50:
+        return {"quality": "Excellent", "color": "green", "bars": 5}
+    elif dbm >= -60:
+        return {"quality": "Good", "color": "yellow", "bars": 4}
+    elif dbm >= -70:
+        return {"quality": "Fair", "color": "orange", "bars": 3}
+    elif dbm >= -80:
+        return {"quality": "Weak", "color": "red", "bars": 2}
+    else:
+        return {"quality": "Very Poor", "color": "darkred", "bars": 1}
+
+
+@app.post("/predict/signal_strength")
+def predict_signal_strength(features: dict):
+    """
+    Predict REAL signal strength (dBm) based on building, floor, hour, and band.
+    
+    Uses Random Forest regression model trained on 355,522 real client signal measurements.
+    
+    Input:
+    - building (required): Building name (e.g. 'ETSE', 'FAC.DRET', 'BIBLIOTECA HUMANITATS')
+    - floor (optional, default: 0): Floor number
+    - hour (optional, default: current): Hour of day (0-23)
+    - band (optional, default: 5): Frequency band (5 for 5GHz, 2.4 for 2.4GHz)
+    
+    Returns:
+    - signal_db: Predicted signal strength in dBm (-97 to -22 range)
+    - quality: Quality description (Excellent/Good/Fair/Weak/Very Poor)
+    - bars: Signal bars (1-5)
+    """
+    model, _, _, buildings = load_signal_model()
+    if model is None:
+        raise HTTPException(status_code=503, detail="Signal strength model not available")
+    
+    # Set default hour to current time if not provided
+    if 'hour' not in features or features['hour'] is None:
+        from datetime import datetime
+        features['hour'] = datetime.now().hour
+    
+    df = _build_signal_features(features)
+    predicted_dbm = float(model.predict(df)[0])
+    
+    quality_info = _dbm_to_quality_text(predicted_dbm)
+    
+    return {
+        "signal_db": round(predicted_dbm, 1),
+        "signal_quality": quality_info["quality"],
+        "bars": quality_info["bars"],
+        "target_unit": "dBm",
+        "model": "RandomForestRegressor (trained on real signal data)",
+        "n_training_samples": 355522,
+        "features_used": {
+            "building": str(features.get('building', 'Unknown')),
+            "floor": float(features.get('floor', 0) or 0),
+            "hour": float(features.get('hour', 12) or 12),
+            "band": float(features.get('band', 5.0) or 5.0),
+        }
+    }
+
+
+@app.get("/predict/signal_strength/buildings")
+def list_available_buildings():
+    """List all buildings available for signal strength prediction."""
+    _, _, _, buildings = load_signal_model()
+    if not buildings:
+        raise HTTPException(status_code=503, detail="Signal strength model not available")
+    return {
+        "buildings": buildings,
+        "count": len(buildings),
+        "model_path": str(SIGNAL_MODEL_PATH)
+    }
+
+
+@app.get("/predict/signal_strength/heatmap")
+def get_signal_heatmap(hour: float = -1, band: float = 5.0):
+    """
+    Generate heatmap data: predicted signal strength for ALL APs across all buildings.
+    Returns GeoJSON-like format with coordinates + predicted signal_db.
+    
+    This endpoint processes all APs from the GeoJSON file and predicts
+    signal strength for each based on its building, floor, and given time.
+    
+    Use this data to render a color-coded heatmap on the frontend.
+    """
+    import json as _json
+    
+    model, _, _, buildings = load_signal_model()
+    if model is None:
+        raise HTTPException(status_code=503, detail="Signal strength model not available")
+    
+    # Set default hour
+    if hour < 0:
+        from datetime import datetime
+        hour = float(datetime.now().hour)
+    
+    # Load GeoJSON
+    geojson_path = BASE_DIR / 'geolocation_package' / 'data' / 'aps_geolocalizados_wgs84.geojson'
+    if not geojson_path.exists():
+        raise HTTPException(status_code=404, detail="GeoJSON file not found")
+    
+    with open(geojson_path) as f:
+        geojson_data = _json.load(f)
+    
+    heatmap_points = []
+    processed_buildings = set()
+    
+    for feature in geojson_data['features']:
+        props = feature['properties']
+        coords = feature['geometry']['coordinates']
+        
+        ap_name = props.get('USER_NOM_A', 'Unknown')
+        building = props.get('USER_EDIFI', 'Unknown')
+        floor = props.get('Num_Planta', 0)
+        
+        if building == 'Unknown' or not building:
+            continue
+        
+        # Predict signal for this AP's building/floor
+        signal_features = {
+            'building': building,
+            'floor': float(floor) if floor is not None else 0.0,
+            'hour': hour,
+            'band': band,
+        }
+        
+        try:
+            df = _build_signal_features(signal_features)
+            predicted_dbm = float(model.predict(df)[0])
+        except Exception:
+            continue
+        
+        quality_info = _dbm_to_quality_text(predicted_dbm)
+        
+        heatmap_points.append({
+            "lat": float(coords[1]),
+            "lng": float(coords[0]),
+            "signal_db": round(predicted_dbm, 1),
+            "signal_quality": quality_info["quality"],
+            "bars": quality_info["bars"],
+            "ap_name": ap_name,
+            "building": building,
+            "floor": int(floor) if floor is not None else 0,
+        })
+        processed_buildings.add(building)
+    
+    return {
+        "type": "heatmap",
+        "hour": hour,
+        "band": band,
+        "total_points": len(heatmap_points),
+        "buildings_count": len(processed_buildings),
+        "buildings": sorted(list(processed_buildings)),
+        "points": heatmap_points,
+        "legend": {
+            "Excellent": {"min_db": -50, "max_db": 0, "color": "green", "bars": 5},
+            "Good": {"min_db": -60, "max_db": -50, "color": "yellow", "bars": 4},
+            "Fair": {"min_db": -70, "max_db": -60, "color": "orange", "bars": 3},
+            "Weak": {"min_db": -80, "max_db": -70, "color": "red", "bars": 2},
+            "Very Poor": {"min_db": -100, "max_db": -80, "color": "darkred", "bars": 1},
+        }
+    }
+
+
+@app.get("/predict/signal_strength/predict")
+def predict_signal_strength_get(
+    building: str,
+    floor: float = 0,
+    hour: float = -1,
+    band: float = 5.0
+):
+    """
+    GET endpoint for signal strength prediction (easier to test in browser).
+    """
+    if hour < 0:
+        from datetime import datetime
+        hour = float(datetime.now().hour)
+    
+    features = {
+        'building': building,
+        'floor': floor,
+        'hour': hour,
+        'band': band
+    }
+    return predict_signal_strength(features)
 
 
 if __name__ == "__main__":
