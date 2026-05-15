@@ -225,22 +225,31 @@ def recommend(lng: float, lat: float, radius: int, min_range: float, max_range: 
 
 
 @app.get("/route/{lat}/{lng}/{dest_lat}/{dest_lng}")
-def route(lng: float, lat: float, dest_lat: float, dest_lng: float):
+def route(lat: float, lng: float, dest_lat: float, dest_lng: float):
     if G is None:
         raise HTTPException(status_code=503, detail="Graph not loaded yet. Try again in a few seconds.")
     
-    source_node = ox.distance.nearest_nodes(G, lng, lat)
-    dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
+    logger.info(f"Route request: from ({lat}, {lng}) to ({dest_lat}, {dest_lng})")
     try:
-        path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
-    except nx.NetworkXNoPath:
-        return {"path": []}
-    path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
-    return {"path": path_coords}
+        source_node = ox.distance.nearest_nodes(G, lng, lat)
+        dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
+        logger.info(f"Nearest nodes: source={source_node}, dest={dest_node}")
+        
+        try:
+            path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
+        except nx.NetworkXNoPath:
+            logger.warning(f"No path found between {source_node} and {dest_node}")
+            return {"path": []}
+        
+        path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
+        return {"path": path_coords}
+    except Exception as e:
+        logger.error(f"Route error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Routing error: {str(e)}")
 
 
 @app.get("/route/advanced/{lat}/{lng}/{dest_lat}/{dest_lng}")
-def advanced_route(lng: float, lat: float, dest_lat: float, dest_lng: float, acceptable_range: int = 500):
+def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acceptable_range: int = 500):
     """
     Advanced routing using find_paths_to_candidates from helper_script.
     Finds multiple candidate paths within an acceptable range of the destination.
@@ -248,7 +257,9 @@ def advanced_route(lng: float, lat: float, dest_lat: float, dest_lng: float, acc
     """
     if G is None:
         raise HTTPException(status_code=503, detail="Graph not loaded yet. Try again in a few seconds.")
-
+    
+    error_msg = ""  # Store error for fallback message
+    
     try:
         source_node = ox.distance.nearest_nodes(G, lng, lat)
         dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
@@ -262,16 +273,13 @@ def advanced_route(lng: float, lat: float, dest_lat: float, dest_lng: float, acc
         
         if not qualified_candidates:
             # Fallback to basic routing
-            try:
-                path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
-                path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
-                return {
-                    "path": path_coords,
-                    "alternatives": [],
-                    "message": "No candidates found in range, using direct path"
-                }
-            except nx.NetworkXNoPath:
-                return {"path": [], "alternatives": [], "message": "No path found"}
+            path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
+            path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
+            return {
+                "path": path_coords,
+                "alternatives": [],
+                "message": "No candidates found in range, using direct path"
+            }
         
         # Find paths to all candidates
         candidate_paths = find_paths_to_candidates(
@@ -311,8 +319,12 @@ def advanced_route(lng: float, lat: float, dest_lat: float, dest_lng: float, acc
             "message": "Route calculated with alternatives"
         }
         
+    except nx.NetworkXNoPath:
+        return {"path": [], "alternatives": [], "message": "No path found"}
     except Exception as e:
-        # Fallback to basic routing on error
+        error_msg = str(e)
+        logger.error(f"Advanced routing error: {e}", exc_info=True)
+        # Fallback to basic routing
         try:
             source_node = ox.distance.nearest_nodes(G, lng, lat)
             dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
@@ -321,10 +333,12 @@ def advanced_route(lng: float, lat: float, dest_lat: float, dest_lng: float, acc
             return {
                 "path": path_coords,
                 "alternatives": [],
-                "message": f"Error in advanced routing, using fallback: {str(e)}"
+                "message": f"Advanced routing failed, using fallback: {error_msg}"
             }
-        except Exception:
-            return {"path": [], "alternatives": [], "message": f"Routing failed: {str(e)}"}
+        except nx.NetworkXNoPath:
+            return {"path": [], "alternatives": [], "message": "No path found in fallback"}
+        except Exception as fallback_err:
+            return {"path": [], "alternatives": [], "message": f"Routing failed: {error_msg} | Fallback: {str(fallback_err)}"}
 
 
 @app.post("/predict")
