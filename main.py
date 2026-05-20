@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from contextlib import asynccontextmanager
 import networkx as nx
 import pandas as pd
 import numpy as np
@@ -14,7 +15,44 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+# 使用 lifespan 上下文管理器替代已弃用的 @app.on_event("startup")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize and cleanup application resources."""
+    global _initialized
+    try:
+        logger.info("Initializing application resources...")
+        
+        # 1. Load ML model (lightweight, should succeed)
+        load_ml_model()
+        logger.info("ML model loaded successfully")
+        
+        # 2. Load signal strength model
+        try:
+            load_signal_model()
+            logger.info("Signal strength model loaded successfully")
+        except Exception as e:
+            logger.warning(f"Signal strength model not loaded: {e}")
+        
+        # 3. Load graph (heavy, may time out - but we catch errors gracefully)
+        try:
+            init_graph()
+            _initialized = True
+        except Exception as e:
+            logger.error(f"Failed to load graph: {e}")
+            logger.warning("Graph routing will be unavailable until graph is loaded")
+            _initialized = False
+    except Exception as e:
+        logger.error(f"Startup initialization failed: {e}")
+        _initialized = False
+    
+    yield  # 应用运行中
+    
+    # 关闭时的清理工作
+    logger.info("Shutting down application...")
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Global variables for lazy-loaded resources
 G = None
@@ -84,37 +122,6 @@ def load_ml_model(force: bool = False):
     error_msg = f"ML model not found. Tried: {', '.join(str(p) for p in candidates)}"
     logger.error(error_msg)
     raise RuntimeError(error_msg)
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize all resources on application startup."""
-    global _initialized
-    try:
-        logger.info("Initializing application resources...")
-        
-        # 1. Load ML model (lightweight, should succeed)
-        load_ml_model()
-        logger.info("ML model loaded successfully")
-        
-        # 2. Load signal strength model
-        try:
-            load_signal_model()
-            logger.info("Signal strength model loaded successfully")
-        except Exception as e:
-            logger.warning(f"Signal strength model not loaded: {e}")
-        
-        # 3. Load graph (heavy, may time out - but we catch errors gracefully)
-        try:
-            init_graph()
-            _initialized = True
-        except Exception as e:
-            logger.error(f"Failed to load graph: {e}")
-            logger.warning("Graph routing will be unavailable until graph is loaded")
-            _initialized = False
-    except Exception as e:
-        logger.error(f"Startup initialization failed: {e}")
-        _initialized = False
 
 
 def _build_feature_dataframe(features: dict) -> pd.DataFrame:
@@ -266,8 +273,8 @@ def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acc
         
         # Find qualified nodes within acceptable range of destination
         qualified_candidates = find_qualified_in_range(
-            G=G,
-            original_target=dest_node,
+            G=G, 
+            original_target=dest_node, 
             acceptable_range=acceptable_range
         )
         
@@ -601,6 +608,224 @@ def get_signal_heatmap(hour: float = -1, band: float = 5.0):
         "buildings_count": len(processed_buildings),
         "buildings": sorted(list(processed_buildings)),
         "points": heatmap_points,
+        "legend": {
+            "Excellent": {"min_db": -50, "max_db": 0, "color": "green", "bars": 5},
+            "Good": {"min_db": -60, "max_db": -50, "color": "yellow", "bars": 4},
+            "Fair": {"min_db": -70, "max_db": -60, "color": "orange", "bars": 3},
+            "Weak": {"min_db": -80, "max_db": -70, "color": "red", "bars": 2},
+            "Very Poor": {"min_db": -100, "max_db": -80, "color": "darkred", "bars": 1},
+        }
+    }
+
+
+@app.get("/predict/signal_strength/heatmap_smooth")
+def get_signal_heatmap_smooth(hour: float = -1, band: float = 5.0, resolution: int = 50):
+    """
+    平滑热力图端点 (Smooth Heatmap)
+    
+    在全校园区域生成一个密集的经纬度网格，对每个网格点使用反距离加权插值 (IDW)
+    预测信号强度，生成连续渐变的信号热力图。
+    
+    参数:
+        hour (float, 默认当前时间): 预测的小时 (0-23)
+        band (float, 默认 5.0): 频段 (5 或 2.4)
+        resolution (int, 默认 50): 网格密度（行数=列数=resolution），值越高网格越密
+                                   - 50 → ~2500 个点，点间距约 30 米
+                                   - 30 → ~900 个点，点间距约 50 米
+                                   - 80 → ~6400 个点，点间距约 18 米
+    
+    返回:
+        type: "heatmap_smooth"
+        grid_size: 网格尺寸 (rows, cols)
+        total_points: 总点数
+        bounds: 校园边界坐标
+        points: 每个网格点的经纬度 + 预测信号强度 + 质量等级
+        legend: 颜色映射图例
+    """
+    import json as _json
+    from math import radians, cos, sin, asin, sqrt
+
+    model, _, _, buildings = load_signal_model()
+    if model is None:
+        raise HTTPException(status_code=503, detail="Signal strength model not available")
+
+    # 设置默认时间
+    if hour < 0:
+        from datetime import datetime
+        hour = float(datetime.now().hour)
+
+    # ================================================================
+    # 第一步：加载 GeoJSON 中的所有 AP，预测每个 AP 的信号强度
+    #         同时记录每个 AP 的经纬度坐标和预测值
+    # ================================================================
+    geojson_path = BASE_DIR / 'geolocation_package' / 'data' / 'aps_geolocalizados_wgs84.geojson'
+    if not geojson_path.exists():
+        raise HTTPException(status_code=404, detail="GeoJSON file not found")
+
+    with open(geojson_path) as f:
+        geojson_data = _json.load(f)
+
+    # 存储 AP 点的列表: [(lat, lng, signal_db), ...]
+    ap_points = []
+    ap_building_map = {}
+
+    for feature in geojson_data['features']:
+        props = feature['properties']
+        coords = feature['geometry']['coordinates']
+
+        ap_name = props.get('USER_NOM_A', 'Unknown')
+        building = props.get('USER_EDIFI', 'Unknown')
+        floor = props.get('Num_Planta', 0)
+
+        if building == 'Unknown' or not building:
+            continue
+
+        # 预测该 AP 位置的信号强度
+        signal_features = {
+            'building': building,
+            'floor': float(floor) if floor is not None else 0.0,
+            'hour': hour,
+            'band': band,
+        }
+
+        try:
+            df = _build_signal_features(signal_features)
+            predicted_dbm = float(model.predict(df)[0])
+        except Exception:
+            continue
+
+        lat = float(coords[1])
+        lng = float(coords[0])
+
+        ap_points.append({
+            'lat': lat,
+            'lng': lng,
+            'signal_db': predicted_dbm,
+            'building': building,
+            'floor': int(floor) if floor is not None else 0,
+        })
+
+        # 记录每个建筑物的 AP 列表（用于后续加权）
+        if building not in ap_building_map:
+            ap_building_map[building] = []
+        ap_building_map[building].append({
+            'lat': lat,
+            'lng': lng,
+            'signal_db': predicted_dbm,
+        })
+
+    if not ap_points:
+        raise HTTPException(status_code=500, detail="No AP data available for heatmap generation")
+
+    # ================================================================
+    # 第二步：确定校园边界，生成密集经纬度网格
+    # ================================================================
+    # UAB 校园边界 (从全局变量 UAB_bbox 获取)
+    north, south, east, west = UAB_bbox  # 41.50736, 41.49505, 2.11543, 2.09491
+
+    # 在边界内加一点内缩，避免边缘网格点落在校园外
+    margin_lat = (north - south) * 0.02
+    margin_lng = (east - west) * 0.02
+    lat_min = south + margin_lat
+    lat_max = north - margin_lat
+    lng_min = west + margin_lng
+    lng_max = east - margin_lng
+
+    # 生成网格
+    lat_steps = resolution
+    lng_steps = resolution
+    lat_grid = [lat_min + (lat_max - lat_min) * i / (lat_steps - 1) for i in range(lat_steps)]
+    lng_grid = [lng_min + (lng_max - lng_min) * i / (lng_steps - 1) for i in range(lng_steps)]
+
+
+    def haversine_distance(lat1, lng1, lat2, lng2):
+        """计算两点间的大圆距离 (单位: 米)"""
+        R = 6371000  # 地球半径 (米)
+        dlat = radians(lat2 - lat1)
+        dlng = radians(lng2 - lng1)
+        a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+        c = 2 * asin(sqrt(a))
+        return R * c
+
+
+    def idw_interpolate(target_lat, target_lng, source_points, power=2, max_dist=500):
+        """
+        反距离加权插值 (Inverse Distance Weighting)
+        
+        参数:
+            target_lat, target_lng: 待插值点的坐标
+            source_points: 源数据点列表，每项为 {'lat': ..., 'lng': ..., 'signal_db': ...}
+            power: 距离的幂次（越大则近处点的权重越大），默认 2
+            max_dist: 最大有效距离（米），超过此距离的点不考虑
+        
+        返回:
+            插值后的信号强度值 (dBm)
+        """
+        weights = []
+        values = []
+        total_weight = 0.0
+
+        for pt in source_points:
+            dist = haversine_distance(target_lat, target_lng, pt['lat'], pt['lng'])
+            if dist < 1:  # 几乎重合
+                return pt['signal_db']
+            if dist > max_dist:  # 距离太远，忽略
+                continue
+            w = 1.0 / (dist ** power)
+            weights.append(w)
+            values.append(pt['signal_db'])
+            total_weight += w
+
+        if total_weight == 0:
+            return None  # 没有足够的邻近点
+
+        weighted_avg = sum(w * v for w, v in zip(weights, values)) / total_weight
+        return weighted_avg
+
+
+    # ================================================================
+    # 第三步：对每个网格点进行 IDW 插值
+    #         用该点附近所有 AP 的预测信号值按距离加权平均
+    #         同时考虑建筑物信息：同一建筑物的 AP 权重加成
+    # ================================================================
+    smooth_points = []
+    total = lat_steps * lng_steps
+    processed_count = 0
+
+    for lat in lat_grid:
+        for lng in lng_grid:
+            # 标准 IDW：用所有 AP 点做插值
+            signal = idw_interpolate(lat, lng, ap_points, power=2, max_dist=400)
+            
+            if signal is None:
+                continue  # 该点无有效邻近 AP，跳过
+
+            quality_info = _dbm_to_quality_text(signal)
+            
+            smooth_points.append({
+                "lat": round(lat, 6),
+                "lng": round(lng, 6),
+                "signal_db": round(signal, 1),
+                "signal_quality": quality_info["quality"],
+                "bars": quality_info["bars"],
+            })
+            processed_count += 1
+
+    logger.info(f"Smooth heatmap generated: {processed_count}/{total} grid points with signal estimates")
+
+    return {
+        "type": "heatmap_smooth",
+        "hour": hour,
+        "band": band,
+        "grid_size": {"rows": lat_steps, "cols": lng_steps, "total": total, "estimated": processed_count},
+        "bounds": {
+            "north": lat_max,
+            "south": lat_min,
+            "east": lng_max,
+            "west": lng_min,
+        },
+        "total_points": len(smooth_points),
+        "points": smooth_points,
         "legend": {
             "Excellent": {"min_db": -50, "max_db": 0, "color": "green", "bars": 5},
             "Good": {"min_db": -60, "max_db": -50, "color": "yellow", "bars": 4},

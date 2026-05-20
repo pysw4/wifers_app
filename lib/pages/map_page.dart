@@ -29,6 +29,29 @@ class _MapPageState extends State<MapPage> {
   StreamSubscription<Position>? _positionSubscription;
 
   final List<APInfo> _aps = [];
+  
+  // Heatmap state (AP point mode)
+  bool _showHeatmap = false;
+  bool _isLoadingHeatmap = false;
+  int _selectedHour = DateTime.now().hour;
+  double _selectedBand = 5.0;
+  Map<String, dynamic>? _heatmapData;
+  Map<String, Color> _signalColors = {
+    'Excellent': const Color(0xFF00C853),  // Green
+    'Good': const Color(0xFFCDDC39),       // Lime
+    'Fair': const Color(0xFFFF9800),       // Orange
+    'Weak': const Color(0xFFE53935),       // Red
+    'Very Poor': const Color(0xFF8B0000),  // Dark Red
+  };
+  
+  // Cache heatmap predictions by AP name
+  Map<String, Map<String, dynamic>> _heatmapCache = {};
+  Timer? _heatmapRefreshTimer;
+
+  // Smooth heatmap state (grid mode)
+  bool _showSmoothHeatmap = false;
+  bool _isLoadingSmoothHeatmap = false;
+  List<Map<String, dynamic>> _smoothHeatmapPoints = [];
 
   Future<void> _loadAps() async {
     try {
@@ -56,12 +79,57 @@ class _MapPageState extends State<MapPage> {
         _aps.addAll(loaded);
       });
     } catch (e) {
-      // If asset loading fails, leave sample list empty and keep map functional.
       debugPrint('Failed to load AP geojson: $e');
     }
   }
 
   List<Marker> get _markers {
+    if (_showHeatmap && _heatmapCache.isNotEmpty) {
+      // Heatmap mode: color-coded markers
+      return _aps.where((ap) => _heatmapCache.containsKey(ap.id ?? ap.name)).map((ap) {
+        final key = ap.id ?? ap.name ?? '';
+        final prediction = _heatmapCache[key];
+        final dbm = prediction?['signal_db'] as num? ?? -70;
+        final quality = prediction?['signal_quality'] as String? ?? 'Fair';
+        final color = _signalColors[quality] ?? Colors.grey;
+        
+        return Marker(
+          point: LatLng(ap.lat, ap.lng),
+          width: 28,
+          height: 28,
+          child: GestureDetector(
+            onTap: () => _showAPOptions(ap, signalDb: dbm.toDouble()),
+            child: Container(
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.6),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 2),
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.4),
+                    blurRadius: 8,
+                    spreadRadius: 2,
+                  ),
+                ],
+              ),
+              child: Center(
+                child: Text(
+                  '${dbm.toInt()}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList()
+      ..addAll(_currentLocationMarker);
+    }
+    
+    // Normal mode: small blue dots
     final List<Marker> markers = _aps.map((ap) {
       return Marker(
         point: LatLng(ap.lat, ap.lng),
@@ -82,8 +150,13 @@ class _MapPageState extends State<MapPage> {
       );
     }).toList();
 
+    markers.addAll(_currentLocationMarker);
+    return markers;
+  }
+
+  List<Marker> get _currentLocationMarker {
     if (_currentLocation != null) {
-      markers.add(
+      return [
         Marker(
           point: _currentLocation!,
           width: 36,
@@ -94,10 +167,9 @@ class _MapPageState extends State<MapPage> {
             size: 36,
           ),
         ),
-      );
+      ];
     }
-
-    return markers;
+    return [];
   }
 
   @override
@@ -110,6 +182,7 @@ class _MapPageState extends State<MapPage> {
   @override
   void dispose() {
     _positionSubscription?.cancel();
+    _heatmapRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -135,7 +208,178 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  void _showAPOptions(APInfo ap) async {
+  Future<void> _loadHeatmap() async {
+    if (_isLoadingHeatmap) return;
+    
+    setState(() {
+      _isLoadingHeatmap = true;
+    });
+
+    try {
+      final data = await _apiService.getSignalHeatmap(
+        hour: _selectedHour,
+        band: _selectedBand,
+      );
+      
+      final points = data['points'] as List<dynamic>;
+      final Map<String, Map<String, dynamic>> cache = {};
+      
+      for (final point in points) {
+        final map = point as Map<String, dynamic>;
+        final apName = map['ap_name'] as String;
+        cache[apName] = {
+          'signal_db': map['signal_db'],
+          'signal_quality': map['signal_quality'],
+          'bars': map['bars'],
+        };
+      }
+
+      setState(() {
+        _heatmapCache = cache;
+        _heatmapData = data;
+        _showHeatmap = true;
+        _isLoadingHeatmap = false;
+      });
+
+      debugPrint('Loaded ${cache.length} heatmap points');
+    } catch (e) {
+      setState(() {
+        _isLoadingHeatmap = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load heatmap: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _loadSmoothHeatmap() async {
+    if (_isLoadingSmoothHeatmap) return;
+    
+    setState(() {
+      _isLoadingSmoothHeatmap = true;
+    });
+
+    try {
+      final data = await _apiService.getSignalHeatmapSmooth(
+        hour: _selectedHour,
+        band: _selectedBand,
+        resolution: 50,
+      );
+      
+      final points = data['points'] as List<dynamic>;
+      final smoothPoints = points.map<Map<String, dynamic>>((p) => Map<String, dynamic>.from(p as Map)).toList();
+
+      setState(() {
+        _smoothHeatmapPoints = smoothPoints;
+        _showSmoothHeatmap = true;
+        _isLoadingSmoothHeatmap = false;
+      });
+
+      debugPrint('Loaded ${smoothPoints.length} smooth heatmap grid points');
+    } catch (e) {
+      setState(() {
+        _isLoadingSmoothHeatmap = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load smooth heatmap: $e')),
+        );
+      }
+    }
+  }
+
+  void _toggleHeatmap() {
+    if (_showHeatmap) {
+      setState(() {
+        _showHeatmap = false;
+      });
+    } else {
+      // Turn off smooth heatmap if active, then load point heatmap
+      if (_showSmoothHeatmap) {
+        setState(() {
+          _showSmoothHeatmap = false;
+          _smoothHeatmapPoints = [];
+        });
+      }
+      _loadHeatmap();
+    }
+  }
+
+  void _toggleSmoothHeatmap() {
+    if (_showSmoothHeatmap) {
+      setState(() {
+        _showSmoothHeatmap = false;
+        _smoothHeatmapPoints = [];
+      });
+    } else {
+      // Turn off point heatmap if active, then load smooth heatmap
+      if (_showHeatmap) {
+        setState(() {
+          _showHeatmap = false;
+          _heatmapCache = {};
+        });
+      }
+      _loadSmoothHeatmap();
+    }
+  }
+
+  Future<void> _showHourPicker() async {
+    final result = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Select Time'),
+        content: SizedBox(
+          width: 300,
+          height: 400,
+          child: Column(
+            children: [
+              Text('Current: ${_selectedHour}:00'),
+              const SizedBox(height: 16),
+              Expanded(
+                child: GridView.builder(
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 4,
+                    childAspectRatio: 1.5,
+                  ),
+                  itemCount: 24,
+                  itemBuilder: (context, index) {
+                    final isSelected = index == _selectedHour;
+                    return Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: isSelected ? Colors.blue : null,
+                          foregroundColor: isSelected ? Colors.white : null,
+                        ),
+                        onPressed: () => Navigator.pop(context, index),
+                        child: Text('${index}:00'),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (result != null) {
+      setState(() {
+        _selectedHour = result;
+      });
+      if (_showHeatmap) {
+        _loadHeatmap(); // Refresh with new time
+      }
+      if (_showSmoothHeatmap) {
+        _loadSmoothHeatmap(); // Refresh smooth heatmap with new time
+      }
+    }
+  }
+
+  void _showAPOptions(APInfo ap, {double? signalDb}) async {
     String predictedStatus = 'unknown';
     try {
       final features = {
@@ -183,6 +427,26 @@ class _MapPageState extends State<MapPage> {
                 ),
               ],
             ),
+            if (signalDb != null) ...[
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.signal_wifi_4_bar,
+                    color: _dbmToColor(signalDb),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Signal: ${signalDb.toStringAsFixed(1)} dBm',
+                    style: TextStyle(
+                      color: _dbmToColor(signalDb),
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 16),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -210,6 +474,14 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
+  Color _dbmToColor(double dbm) {
+    if (dbm >= -50) return const Color(0xFF00C853);
+    if (dbm >= -60) return const Color(0xFFCDDC39);
+    if (dbm >= -70) return const Color(0xFFFF9800);
+    if (dbm >= -80) return const Color(0xFFE53935);
+    return const Color(0xFF8B0000);
+  }
+
   Future<void> _navigateToAP(APInfo ap) async {
     Navigator.pop(context);
     if (_currentLocation == null) {
@@ -220,7 +492,6 @@ class _MapPageState extends State<MapPage> {
     }
 
     try {
-      // Use advanced routing to get best path with alternatives
       final routeResult = await _apiService.fetchAdvancedRoute(
         _currentLocation!.longitude,
         _currentLocation!.latitude,
@@ -238,7 +509,6 @@ class _MapPageState extends State<MapPage> {
       }).toList();
 
       if (path.isNotEmpty) {
-        // Parse alternatives if available
         final alternativesData = routeResult['alternatives'] as List<dynamic>? ?? [];
         final alternatives = <RouteAlternative>[];
         
@@ -423,32 +693,260 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
+  /// Build smooth heatmap grid polygons from the loaded grid points
+  List<Polygon> get _smoothHeatmapPolygons {
+    if (_smoothHeatmapPoints.isEmpty) return [];
+    
+    // Estimate grid cell size from the first two points
+    final first = _smoothHeatmapPoints[0];
+    final second = _smoothHeatmapPoints.length > 1 ? _smoothHeatmapPoints[1] : null;
+    double latStep = 0.0004;  // ~40m default fallback
+    double lngStep = 0.0004;
+    if (second != null) {
+      latStep = ((second['lat'] as num) - (first['lat'] as num)).abs().toDouble();
+      lngStep = ((second['lng'] as num) - (first['lng'] as num)).abs().toDouble();
+      if (latStep == 0) latStep = 0.0004;
+      if (lngStep == 0) lngStep = 0.0004;
+    }
+    // halve the step so cells tile without gaps
+    final halfLat = latStep / 2;
+    final halfLng = lngStep / 2;
+
+    return _smoothHeatmapPoints.map((point) {
+      final lat = (point['lat'] as num).toDouble();
+      final lng = (point['lng'] as num).toDouble();
+      final quality = point['signal_quality'] as String? ?? 'Fair';
+      final color = _signalColors[quality] ?? Colors.grey;
+      
+      // Create a small rectangle polygon around each grid point
+      return Polygon(
+        points: [
+          LatLng(lat - halfLat, lng - halfLng),
+          LatLng(lat - halfLat, lng + halfLng),
+          LatLng(lat + halfLat, lng + halfLng),
+          LatLng(lat + halfLat, lng - halfLng),
+        ],
+        color: color.withValues(alpha: 0.35),
+        borderColor: color.withValues(alpha: 0.1),
+        borderStrokeWidth: 0.5,
+      );
+    }).toList();
+  }
+
+  Widget _buildHeatmapLegend() {
+    // Smooth heatmap legend
+    if (_showSmoothHeatmap && _smoothHeatmapPoints.isNotEmpty) {
+      return Positioned(
+        top: 10,
+        right: 10,
+        child: Card(
+          elevation: 4,
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            width: 160,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Signal Strength',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+                Text(
+                  '${_selectedHour}:00 (Smooth)',
+                  style: const TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                const Divider(height: 8),
+                for (final entry in _signalColors.entries)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 12,
+                          height: 12,
+                          decoration: BoxDecoration(
+                            color: entry.value.withValues(alpha: 0.6),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            entry.key,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                const Divider(height: 8),
+                Text(
+                  '${_smoothHeatmapPoints.length} grid points',
+                  style: const TextStyle(fontSize: 10, color: Colors.grey),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    
+    // Point heatmap legend
+    if (!_showHeatmap || _heatmapData == null) return const SizedBox.shrink();
+    
+    final legend = _heatmapData!['legend'] as Map<String, dynamic>?;
+    if (legend == null) return const SizedBox.shrink();
+    
+    final totalPoints = _heatmapData!['total_points'] ?? 0;
+    final buildingsCount = _heatmapData!['buildings_count'] ?? 0;
+    
+    return Positioned(
+      top: 10,
+      right: 10,
+      child: Card(
+        elevation: 4,
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          width: 160,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Signal Strength',
+                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              Text(
+                '${_selectedHour}:00',
+                style: const TextStyle(fontSize: 11, color: Colors.grey),
+              ),
+              const Divider(height: 8),
+              for (final entry in legend.entries)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 12,
+                        height: 12,
+                        decoration: BoxDecoration(
+                          color: _signalColors[entry.key] ?? Colors.grey,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          entry.key,
+                          style: const TextStyle(fontSize: 11),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              const Divider(height: 8),
+              Text(
+                '$totalPoints APs',
+                style: const TextStyle(fontSize: 10, color: Colors.grey),
+              ),
+              Text(
+                '$buildingsCount buildings',
+                style: const TextStyle(fontSize: 10, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final displayCenter = _currentLocation ?? _center;
 
     return Scaffold(
-      body: FlutterMap(
-        mapController: _mapController,
-        options: MapOptions(
-          initialCenter: displayCenter,
-          initialZoom: 15.0,
-          keepAlive: true,
-        ),
+      body: Stack(
         children: [
-          TileLayer(
-            urlTemplate: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-            userAgentPackageName: 'com.uab.wifers',
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: displayCenter,
+              initialZoom: 15.0,
+              keepAlive: true,
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.uab.wifers',
+              ),
+              // Smooth heatmap grid overlay (rendered below markers)
+              if (_showSmoothHeatmap)
+                PolygonLayer(
+                  polygons: _smoothHeatmapPolygons,
+                ),
+              MarkerLayer(
+                markers: _markers,
+              ),
+            ],
           ),
-          MarkerLayer(
-            markers: _markers,
-          ),
+          // Heatmap legend overlay
+          _buildHeatmapLegend(),
         ],
       ),
       floatingActionButton: Column(
         mainAxisAlignment: MainAxisAlignment.end,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          // Point heatmap toggle button
+          FloatingActionButton(
+            heroTag: 'heatmap',
+            mini: true,
+            onPressed: _toggleHeatmap,
+            backgroundColor: _showHeatmap ? Colors.blue : null,
+            child: _isLoadingHeatmap
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    Icons.layers,
+                    color: _showHeatmap ? Colors.white : null,
+                  ),
+          ),
+          const SizedBox(height: 8),
+          // Smooth heatmap toggle button
+          FloatingActionButton(
+            heroTag: 'heatmap_smooth',
+            mini: true,
+            onPressed: _toggleSmoothHeatmap,
+            backgroundColor: _showSmoothHeatmap ? Colors.blue : null,
+            child: _isLoadingSmoothHeatmap
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    Icons.grid_4x4,
+                    color: _showSmoothHeatmap ? Colors.white : null,
+                  ),
+          ),
+          if (_showHeatmap || _showSmoothHeatmap) ...[
+            const SizedBox(height: 8),
+            // Time picker
+            FloatingActionButton(
+              heroTag: 'time',
+              mini: true,
+              onPressed: _showHourPicker,
+              child: Text(
+                '${_selectedHour}h',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
           FloatingActionButton.extended(
             heroTag: 'favorites',
             onPressed: () {

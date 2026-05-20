@@ -163,8 +163,12 @@ class _RecommendPageState extends State<RecommendPage> {
         final predictionInfo = predictions[i] as Map<String, dynamic>;
         final prediction = predictionInfo['prediction'] as String? ?? 'Unknown';
         final confidence = (predictionInfo['confidence'] as num?)?.toDouble() ?? 0.0;
+        // up_probability is the model's confidence that AP is "Up" (0-100%)
+        final upProbability = (predictionInfo['up_probability'] as num?)?.toDouble() ?? 0.0;
         final distance = ap['distance'] as double;
-        final statusScore = prediction == 'Up' ? 1.0 : 0.0;
+        
+        // Use up_probability (0-100) instead of binary Up/Down for smoother scoring
+        final statusScore = upProbability / 100.0;
         final distanceScore = (1.0 - (distance / _recommendRadiusMeters)).clamp(0.0, 1.0);
         final stabilityWeight = _preferStableAps ? 0.7 : 0.5;
         final score = statusScore * stabilityWeight + distanceScore * (1.0 - stabilityWeight);
@@ -291,7 +295,24 @@ class _RecommendPageState extends State<RecommendPage> {
                               children: [
                                 Text('${ap.distance.toStringAsFixed(0)} m'),
                                 const SizedBox(height: 4),
-                                Text('${ap.prediction} (${(ap.confidence * 100).toStringAsFixed(0)}%)', style: TextStyle(color: ap.prediction == 'Up' ? Colors.green : Colors.red)),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.wifi,
+                                      size: 14,
+                                      color: ap.prediction == 'Up' ? Colors.green : Colors.red,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    Text(
+                                      '${(ap.score * 100).toStringAsFixed(0)}%',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        color: ap.prediction == 'Up' ? Colors.green : Colors.red,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ],
                             ),
                             onTap: () => _navigateToAp(ap),
