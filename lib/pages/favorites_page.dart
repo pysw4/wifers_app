@@ -3,7 +3,7 @@ import 'package:wifers_app/models/ap_info.dart';
 import 'package:wifers_app/services/storage_service.dart';
 import 'package:wifers_app/services/api_service.dart';
 import 'package:wifers_app/services/location_service.dart';
-import 'package:wifers_app/pages/RoutePage.dart';
+import 'package:wifers_app/pages/route_page.dart';
 
 class FavoritesPage extends StatefulWidget {
   const FavoritesPage({super.key});

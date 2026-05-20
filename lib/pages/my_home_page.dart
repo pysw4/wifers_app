@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:wifers_app/pages/map_page.dart';
-import 'package:wifers_app/pages/RecommendPage.dart';
-import 'package:wifers_app/pages/SettingPage.dart';
+import 'package:wifers_app/pages/recommend_page.dart';
+import 'package:wifers_app/pages/setting_page.dart';
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});

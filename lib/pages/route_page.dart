@@ -297,7 +297,15 @@ class _RoutePageState extends State<RoutePage> {
               options: MapOptions(
                 initialCenter: displayCenter,
                 initialZoom: _currentZoom,
+                minZoom: 13.0,
+                maxZoom: 19.0,
                 keepAlive: true,
+                cameraConstraint: CameraConstraint.contain(
+                  bounds: LatLngBounds(
+                    const LatLng(41.47, 2.07),  // 西南角
+                    const LatLng(41.54, 2.14),  // 东北角
+                  ),
+                ),
                 onPositionChanged: (position, bool hasGesture) {
                   _currentZoom = position.zoom;
                 },

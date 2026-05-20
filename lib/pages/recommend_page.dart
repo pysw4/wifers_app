@@ -6,7 +6,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:wifers_app/services/api_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
-import 'package:wifers_app/pages/RoutePage.dart';
+import 'package:wifers_app/pages/route_page.dart';
 
 class RecommendPage extends StatefulWidget {
   const RecommendPage({super.key});

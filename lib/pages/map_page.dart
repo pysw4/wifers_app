@@ -10,8 +10,8 @@ import 'package:wifers_app/services/api_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
 import 'package:wifers_app/models/ap_info.dart';
-import 'package:wifers_app/pages/RoutePage.dart';
-import 'package:wifers_app/pages/FavoritesPage.dart';
+import 'package:wifers_app/pages/route_page.dart';
+import 'package:wifers_app/pages/favorites_page.dart';
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -40,11 +40,11 @@ class _MapPageState extends State<MapPage> {
   final double _selectedBand = 5.0;
   Map<String, dynamic>? _heatmapData;
   final Map<String, Color> _signalColors = {
-    'Excellent': const Color(0xFF00C853),  // Green
-    'Good': const Color(0xFFCDDC39),       // Lime
-    'Fair': const Color(0xFFFF9800),       // Orange
-    'Weak': const Color(0xFFE53935),       // Red
-    'Very Poor': const Color(0xFF8B0000),  // Dark Red
+    'Excellent': const Color(0xFF00E676),  // Bright Green (strongest signal)
+    'Good': const Color(0xFF76FF03),       // Light Green
+    'Fair': const Color(0xFFFFEA00),       // Yellow
+    'Weak': const Color(0xFFFF6D00),       // Orange
+    'Very Poor': const Color(0xFFD50000),  // Red (weakest signal)
   };
   
   // Cache heatmap predictions by AP name
@@ -529,12 +529,32 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
+  /// Convert dBm signal strength to a color using smooth gradient interpolation.
+  /// Stronger signal (closer to 0) = Green, Weaker signal (more negative) = Red.
+  /// Uses a continuous gradient: Green → Yellow → Orange → Red
   Color _dbmToColor(double dbm) {
-    if (dbm >= -50) return const Color(0xFF00C853);
-    if (dbm >= -60) return const Color(0xFFCDDC39);
-    if (dbm >= -70) return const Color(0xFFFF9800);
-    if (dbm >= -80) return const Color(0xFFE53935);
-    return const Color(0xFF8B0000);
+    // Clamp dBm to the expected range [-97, -22]
+    final clamped = dbm.clamp(-97.0, -22.0);
+    // Normalize to 0.0 (weakest) ~ 1.0 (strongest)
+    final t = (clamped - (-97.0)) / (-22.0 - (-97.0)); // t in [0, 1]
+    
+    // Define gradient stops: Red (weak) → Orange → Yellow → Green (strong)
+    const stops = [0.0, 0.33, 0.66, 1.0];
+    const colors = [
+      Color(0xFFD50000),  // Red (very poor)
+      Color(0xFFFF6D00),  // Orange (weak)
+      Color(0xFFFFEA00),  // Yellow (fair)
+      Color(0xFF00E676),  // Green (excellent)
+    ];
+    
+    // Find which segment t falls into and interpolate
+    for (int i = 0; i < stops.length - 1; i++) {
+      if (t >= stops[i] && t <= stops[i + 1]) {
+        final localT = (t - stops[i]) / (stops[i + 1] - stops[i]);
+        return Color.lerp(colors[i], colors[i + 1], localT)!;
+      }
+    }
+    return colors.last;
   }
 
   Future<void> _navigateToAP(APInfo ap) async {
@@ -582,6 +602,7 @@ class _MapPageState extends State<MapPage> {
           ));
         }
 
+        if (!mounted) return;
         Navigator.push(
           context,
           MaterialPageRoute(
@@ -595,6 +616,7 @@ class _MapPageState extends State<MapPage> {
         );
       }
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error fetching route: $e')),
       );
@@ -619,6 +641,7 @@ class _MapPageState extends State<MapPage> {
     );
 
     await StorageService.addFavorite(apInfo);
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('${ap.name ?? 'AP'} added to favorites')),
     );
@@ -707,6 +730,8 @@ class _MapPageState extends State<MapPage> {
           ElevatedButton(
             onPressed: () async {
               if (formKey.currentState!.validate()) {
+                // Capture ScaffoldMessenger before dismissing dialog and awaiting
+                final messenger = ScaffoldMessenger.of(context);
                 Navigator.pop(context);
                 try {
                   final features = {
@@ -735,11 +760,11 @@ class _MapPageState extends State<MapPage> {
                     ));
                   });
 
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     SnackBar(content: Text('Predicted status: $status')),
                   );
                 } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     SnackBar(content: Text('Error: $e')),
                   );
                 }
@@ -934,7 +959,15 @@ class _MapPageState extends State<MapPage> {
             options: MapOptions(
               initialCenter: displayCenter,
               initialZoom: 15.0,
+              minZoom: 13.0,
+              maxZoom: 19.0,
               keepAlive: true,
+              cameraConstraint: CameraConstraint.contain(
+                bounds: LatLngBounds(
+                  const LatLng(41.47, 2.07),  // 西南角
+                  const LatLng(41.54, 2.14),  // 东北角
+                ),
+              ),
               onMapEvent: (event) {
                 // Track zoom level (MapController has no zoom getter)
                 if (event is MapEventMoveEnd || event is MapEventFlingAnimationEnd) {

@@ -62,7 +62,6 @@ model_path = None
 _initialized = False
 
 UAB_bbox = 41.50736, 41.49505, 2.11543, 2.09491
-
 MODEL_FEATURES = [
     'client_count',
     'cpu_utilization',
@@ -454,17 +453,20 @@ def _build_signal_features(features: dict) -> pd.DataFrame:
 
 
 def _dbm_to_quality_text(dbm: float) -> dict:
-    """Convert dBm value to quality description."""
+    """Convert dBm value to quality description.
+    
+    Color scheme: Green (strong) → Yellow → Orange → Red (weak)
+    """
     if dbm >= -50:
-        return {"quality": "Excellent", "color": "green", "bars": 5}
+        return {"quality": "Excellent", "color": "#00E676", "bars": 5}
     elif dbm >= -60:
-        return {"quality": "Good", "color": "yellow", "bars": 4}
+        return {"quality": "Good", "color": "#76FF03", "bars": 4}
     elif dbm >= -70:
-        return {"quality": "Fair", "color": "orange", "bars": 3}
+        return {"quality": "Fair", "color": "#FFEA00", "bars": 3}
     elif dbm >= -80:
-        return {"quality": "Weak", "color": "red", "bars": 2}
+        return {"quality": "Weak", "color": "#FF6D00", "bars": 2}
     else:
-        return {"quality": "Very Poor", "color": "darkred", "bars": 1}
+        return {"quality": "Very Poor", "color": "#D50000", "bars": 1}
 
 
 @app.post("/predict/signal_strength")

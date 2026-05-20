@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'package:wifers_app/pages/MyHomePage.dart';
+import 'package:wifers_app/pages/my_home_page.dart';
 void main() {
   runApp(const MyApp());
 }
