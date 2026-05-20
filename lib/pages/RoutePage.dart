@@ -270,7 +270,8 @@ class _RoutePageState extends State<RoutePage> {
                         label: Text(
                           index == 0
                               ? 'Best Route'
-                              : 'Alt ${index} (${(_alternatives[index - 1].distance / 1000).toStringAsFixed(1)} km)',
+                              : 'Alt $index (${(_alternatives[index - 1].distance / 1000).toStringAsFixed(1)} km)',
+
                         ),
                         selected: _selectedRouteIndex == index,
                         onSelected: (selected) {

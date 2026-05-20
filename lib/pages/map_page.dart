@@ -28,15 +28,18 @@ class _MapPageState extends State<MapPage> {
   LatLng? _currentLocation;
   StreamSubscription<Position>? _positionSubscription;
 
+  double _currentZoom = 15.0; // Track zoom level manually (MapController has no zoom getter)
+  
   final List<APInfo> _aps = [];
   
+
   // Heatmap state (AP point mode)
   bool _showHeatmap = false;
   bool _isLoadingHeatmap = false;
   int _selectedHour = DateTime.now().hour;
-  double _selectedBand = 5.0;
+  final double _selectedBand = 5.0;
   Map<String, dynamic>? _heatmapData;
-  Map<String, Color> _signalColors = {
+  final Map<String, Color> _signalColors = {
     'Excellent': const Color(0xFF00C853),  // Green
     'Good': const Color(0xFFCDDC39),       // Lime
     'Fair': const Color(0xFFFF9800),       // Orange
@@ -83,8 +86,53 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
+  /// 根据当前地图缩放级别计算 AP 图标大小
+  /// 缩放级别越大（放得越大），图标越大
+  double _getMarkerSize({bool isHeatmap = false}) {
+    final zoom = _currentZoom;
+
+    if (isHeatmap) {
+      if (zoom >= 18) return 36;
+      if (zoom >= 16) return 28;
+      if (zoom >= 14) return 20;
+      if (zoom >= 12) return 14;
+      return 10; // zoom < 12，即使热力图也变小
+    }
+    // 普通模式
+    if (zoom >= 18) return 14;
+    if (zoom >= 16) return 8;
+    if (zoom >= 14) return 5;
+    if (zoom >= 12) return 3;
+    return 0; // zoom < 12 时隐藏普通蓝点
+  }
+
+  /// 热力图模式下数字字体大小
+  double _getHeatmapTextSize() {
+    final zoom = _currentZoom;
+
+    if (zoom >= 18) return 11;
+    if (zoom >= 16) return 8;
+    if (zoom >= 14) return 7;
+    if (zoom >= 12) return 6;
+    return 5;
+  }
+
+  /// 热力图模式下是否显示 AP 标记（缩放太小时只显示热力图网格不显示点）
+  bool get _shouldShowMarkers {
+    if (_showSmoothHeatmap && _currentZoom < 12) return false;
+    return true;
+  }
+
+
   List<Marker> get _markers {
-    if (_showHeatmap && _heatmapCache.isNotEmpty) {
+    final markerSize = _getMarkerSize();
+    final heatmapSize = _getMarkerSize(isHeatmap: true);
+    final heatmapTextSize = _getHeatmapTextSize();
+    final isHeatmapVisible = _showHeatmap && _heatmapCache.isNotEmpty;
+
+    if (!_shouldShowMarkers) return _currentLocationMarker;
+    
+    if (isHeatmapVisible) {
       // Heatmap mode: color-coded markers
       return _aps.where((ap) => _heatmapCache.containsKey(ap.id ?? ap.name)).map((ap) {
         final key = ap.id ?? ap.name ?? '';
@@ -92,36 +140,39 @@ class _MapPageState extends State<MapPage> {
         final dbm = prediction?['signal_db'] as num? ?? -70;
         final quality = prediction?['signal_quality'] as String? ?? 'Fair';
         final color = _signalColors[quality] ?? Colors.grey;
-        
+
+        // If marker is too small, only show a dot without text
+        final showDetail = heatmapSize >= 14;
+
         return Marker(
           point: LatLng(ap.lat, ap.lng),
-          width: 28,
-          height: 28,
+          width: heatmapSize,
+          height: heatmapSize,
           child: GestureDetector(
             onTap: () => _showAPOptions(ap, signalDb: dbm.toDouble()),
             child: Container(
               decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.6),
+                color: color.withValues(alpha: showDetail ? 0.6 : 0.4),
                 shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withValues(alpha: 0.8), width: 2),
-                boxShadow: [
+                border: Border.all(color: Colors.white.withValues(alpha: showDetail ? 0.8 : 0.4), width: showDetail ? 2 : 1),
+                boxShadow: showDetail ? [
                   BoxShadow(
                     color: color.withValues(alpha: 0.4),
                     blurRadius: 8,
                     spreadRadius: 2,
                   ),
-                ],
+                ] : null,
               ),
-              child: Center(
+              child: showDetail ? Center(
                 child: Text(
                   '${dbm.toInt()}',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: Colors.white,
-                    fontSize: 8,
+                    fontSize: heatmapTextSize,
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-              ),
+              ) : null,
             ),
           ),
         );
@@ -129,17 +180,19 @@ class _MapPageState extends State<MapPage> {
       ..addAll(_currentLocationMarker);
     }
     
-    // Normal mode: small blue dots
+    // Normal mode: small dots (hidden when zoom < 12)
+    if (markerSize == 0) return _currentLocationMarker;
+
     final List<Marker> markers = _aps.map((ap) {
       return Marker(
         point: LatLng(ap.lat, ap.lng),
-        width: 24,
-        height: 24,
+        width: markerSize + 16,  // more touch area than visible dot
+        height: markerSize + 16,
         child: GestureDetector(
           onTap: () => _showAPOptions(ap),
           child: Container(
-            width: 8,
-            height: 8,
+            width: markerSize,
+            height: markerSize,
             decoration: BoxDecoration(
               color: const Color.fromRGBO(33, 150, 243, 0.5),
               shape: BoxShape.circle,
@@ -265,7 +318,7 @@ class _MapPageState extends State<MapPage> {
       final data = await _apiService.getSignalHeatmapSmooth(
         hour: _selectedHour,
         band: _selectedBand,
-        resolution: 50,
+        resolution: 30,
       );
       
       final points = data['points'] as List<dynamic>;
@@ -335,7 +388,8 @@ class _MapPageState extends State<MapPage> {
           height: 400,
           child: Column(
             children: [
-              Text('Current: ${_selectedHour}:00'),
+              Text('Current: $_selectedHour:00'),
+
               const SizedBox(height: 16),
               Expanded(
                 child: GridView.builder(
@@ -354,7 +408,8 @@ class _MapPageState extends State<MapPage> {
                           foregroundColor: isSelected ? Colors.white : null,
                         ),
                         onPressed: () => Navigator.pop(context, index),
-                        child: Text('${index}:00'),
+                        child: Text('$index:00'),
+
                       ),
                     );
                   },
@@ -570,15 +625,16 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _showPredictionDialog([APInfo? ap]) {
-    final _formKey = GlobalKey<FormState>();
-    final _clientCountController = TextEditingController(text: '10');
-    final _cpuUtilizationController = TextEditingController(text: '50.0');
-    final _memFreeController = TextEditingController(text: '1000.0');
-    final _memTotalController = TextEditingController(text: '2000.0');
-    final _lastModifiedController = TextEditingController(text: '1640995200.0');
-    final _hourController = TextEditingController(text: '12.0');
-    final _memUsageController = TextEditingController(text: '50.0');
-    bool _overloaded = false;
+    final formKey = GlobalKey<FormState>();
+    final clientCountController = TextEditingController(text: '10');
+    final cpuUtilizationController = TextEditingController(text: '50.0');
+    final memFreeController = TextEditingController(text: '1000.0');
+    final memTotalController = TextEditingController(text: '2000.0');
+    final lastModifiedController = TextEditingController(text: '1640995200.0');
+    final hourController = TextEditingController(text: '12.0');
+    final memUsageController = TextEditingController(text: '50.0');
+    bool overloaded = false;
+
 
     showDialog(
       context: context,
@@ -586,56 +642,58 @@ class _MapPageState extends State<MapPage> {
         title: Text('Predict AP Status${ap != null ? ' for ${ap.name}' : ''}'),
         content: SingleChildScrollView(
           child: Form(
-            key: _formKey,
+            key: formKey,
+
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 TextFormField(
-                  controller: _clientCountController,
+                  controller: clientCountController,
                   decoration: const InputDecoration(labelText: 'Client Count'),
                   keyboardType: TextInputType.number,
                   validator: (value) => value!.isEmpty ? 'Required' : null,
                 ),
                 TextFormField(
-                  controller: _cpuUtilizationController,
+                  controller: cpuUtilizationController,
                   decoration: const InputDecoration(labelText: 'CPU Utilization (%)'),
                   keyboardType: TextInputType.number,
                   validator: (value) => value!.isEmpty ? 'Required' : null,
                 ),
                 TextFormField(
-                  controller: _memFreeController,
+                  controller: memFreeController,
                   decoration: const InputDecoration(labelText: 'Memory Free'),
                   keyboardType: TextInputType.number,
                   validator: (value) => value!.isEmpty ? 'Required' : null,
                 ),
                 TextFormField(
-                  controller: _memTotalController,
+                  controller: memTotalController,
                   decoration: const InputDecoration(labelText: 'Memory Total'),
                   keyboardType: TextInputType.number,
                   validator: (value) => value!.isEmpty ? 'Required' : null,
                 ),
                 TextFormField(
-                  controller: _lastModifiedController,
+                  controller: lastModifiedController,
                   decoration: const InputDecoration(labelText: 'Last Modified (Unix)'),
                   keyboardType: TextInputType.number,
                   validator: (value) => value!.isEmpty ? 'Required' : null,
                 ),
                 TextFormField(
-                  controller: _hourController,
+                  controller: hourController,
                   decoration: const InputDecoration(labelText: 'Hour'),
                   keyboardType: TextInputType.number,
                   validator: (value) => value!.isEmpty ? 'Required' : null,
                 ),
                 TextFormField(
-                  controller: _memUsageController,
+                  controller: memUsageController,
                   decoration: const InputDecoration(labelText: 'Memory Usage (%)'),
                   keyboardType: TextInputType.number,
                   validator: (value) => value!.isEmpty ? 'Required' : null,
                 ),
                 SwitchListTile(
                   title: const Text('Overloaded'),
-                  value: _overloaded,
-                  onChanged: (value) => setState(() => _overloaded = value),
+                  value: overloaded,
+                  onChanged: (value) => setState(() => overloaded = value),
+
                 ),
               ],
             ),
@@ -648,18 +706,19 @@ class _MapPageState extends State<MapPage> {
           ),
           ElevatedButton(
             onPressed: () async {
-              if (_formKey.currentState!.validate()) {
+              if (formKey.currentState!.validate()) {
                 Navigator.pop(context);
                 try {
                   final features = {
-                    'client_count': int.parse(_clientCountController.text),
-                    'cpu_utilization': double.parse(_cpuUtilizationController.text),
-                    'mem_free': double.parse(_memFreeController.text),
-                    'mem_total': double.parse(_memTotalController.text),
-                    'last_modified': double.parse(_lastModifiedController.text),
-                    'hour': double.parse(_hourController.text),
-                    'mem_usage': double.parse(_memUsageController.text),
-                    'overloaded': _overloaded ? 1 : 0,
+                    'client_count': int.parse(clientCountController.text),
+                    'cpu_utilization': double.parse(cpuUtilizationController.text),
+                    'mem_free': double.parse(memFreeController.text),
+                    'mem_total': double.parse(memTotalController.text),
+                    'last_modified': double.parse(lastModifiedController.text),
+                    'hour': double.parse(hourController.text),
+                    'mem_usage': double.parse(memUsageController.text),
+                    'overloaded': overloaded ? 1 : 0,
+
                   };
                   final result = await _apiService.predictAPStatus(features);
                   final status = result['prediction'];
@@ -753,8 +812,9 @@ class _MapPageState extends State<MapPage> {
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                 ),
                 Text(
-                  '${_selectedHour}:00 (Smooth)',
+                  '$_selectedHour:00 (Smooth)',
                   style: const TextStyle(fontSize: 11, color: Colors.grey),
+
                 ),
                 const Divider(height: 8),
                 for (final entry in _signalColors.entries)
@@ -818,7 +878,8 @@ class _MapPageState extends State<MapPage> {
                 style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
               ),
               Text(
-                '${_selectedHour}:00',
+                '$_selectedHour:00',
+
                 style: const TextStyle(fontSize: 11, color: Colors.grey),
               ),
               const Divider(height: 8),
@@ -874,6 +935,14 @@ class _MapPageState extends State<MapPage> {
               initialCenter: displayCenter,
               initialZoom: 15.0,
               keepAlive: true,
+              onMapEvent: (event) {
+                // Track zoom level (MapController has no zoom getter)
+                if (event is MapEventMoveEnd || event is MapEventFlingAnimationEnd) {
+                  _currentZoom = _mapController.camera.zoom;
+                  setState(() {});
+                }
+              },
+
             ),
             children: [
               TileLayer(

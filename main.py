@@ -618,8 +618,11 @@ def get_signal_heatmap(hour: float = -1, band: float = 5.0):
     }
 
 
+# 平滑热力图结果缓存：键为 (hour, band)，避免重复计算
+_heatmap_smooth_cache: dict = {}
+
 @app.get("/predict/signal_strength/heatmap_smooth")
-def get_signal_heatmap_smooth(hour: float = -1, band: float = 5.0, resolution: int = 50):
+def get_signal_heatmap_smooth(hour: float = -1, band: float = 5.0, resolution: int = 30):
     """
     平滑热力图端点 (Smooth Heatmap)
     
@@ -653,6 +656,12 @@ def get_signal_heatmap_smooth(hour: float = -1, band: float = 5.0, resolution: i
     if hour < 0:
         from datetime import datetime
         hour = float(datetime.now().hour)
+
+    # 检查缓存：相同 hour + band 的结果直接返回，避免重复计算
+    cache_key = (int(hour), float(band))
+    if cache_key in _heatmap_smooth_cache:
+        logger.info(f"Returning cached smooth heatmap for hour={hour}, band={band}")
+        return _heatmap_smooth_cache[cache_key]
 
     # ================================================================
     # 第一步：加载 GeoJSON 中的所有 AP，预测每个 AP 的信号强度
@@ -748,7 +757,7 @@ def get_signal_heatmap_smooth(hour: float = -1, band: float = 5.0, resolution: i
         return R * c
 
 
-    def idw_interpolate(target_lat, target_lng, source_points, power=2, max_dist=500):
+    def idw_interpolate(target_lat, target_lng, source_points, power=2, max_dist=300):
         """
         反距离加权插值 (Inverse Distance Weighting)
         
@@ -794,8 +803,8 @@ def get_signal_heatmap_smooth(hour: float = -1, band: float = 5.0, resolution: i
 
     for lat in lat_grid:
         for lng in lng_grid:
-            # 标准 IDW：用所有 AP 点做插值
-            signal = idw_interpolate(lat, lng, ap_points, power=2, max_dist=400)
+            # 标准 IDW：用所有 AP 点做插值（默认 max_dist=300，仅考虑 300m 内的 AP）
+            signal = idw_interpolate(lat, lng, ap_points, power=2)
             
             if signal is None:
                 continue  # 该点无有效邻近 AP，跳过
@@ -813,7 +822,7 @@ def get_signal_heatmap_smooth(hour: float = -1, band: float = 5.0, resolution: i
 
     logger.info(f"Smooth heatmap generated: {processed_count}/{total} grid points with signal estimates")
 
-    return {
+    result = {
         "type": "heatmap_smooth",
         "hour": hour,
         "band": band,
@@ -834,6 +843,8 @@ def get_signal_heatmap_smooth(hour: float = -1, band: float = 5.0, resolution: i
             "Very Poor": {"min_db": -100, "max_db": -80, "color": "darkred", "bars": 1},
         }
     }
+    _heatmap_smooth_cache[cache_key] = result
+    return result
 
 
 @app.get("/predict/signal_strength/predict")
