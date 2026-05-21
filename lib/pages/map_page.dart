@@ -464,23 +464,49 @@ class _MapPageState extends State<MapPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                ElevatedButton.icon(
+                _buildActionButton(
+                  icon: Icons.directions,
+                  label: 'Navigate',
                   onPressed: () => _navigateToAP(ap),
-                  icon: const Icon(Icons.directions),
-                  label: const Text('Navigate'),
                 ),
-                ElevatedButton.icon(
+                _buildActionButton(
+                  icon: Icons.trending_up,
+                  label: '24h Trend',
                   onPressed: () => _showAPTrend(ap),
-                  icon: const Icon(Icons.trending_up),
-                  label: const Text('24h Trend'),
                 ),
-                ElevatedButton.icon(
+                _buildActionButton(
+                  icon: Icons.favorite,
+                  label: 'Favorite',
                   onPressed: () => _favoriteAP(ap),
-                  icon: const Icon(Icons.favorite),
-                  label: const Text('Favorite'),
                 ),
               ],
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 构建底部操作按钮（紧凑样式）
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required VoidCallback onPressed,
+  }) {
+    return SizedBox(
+      child: TextButton(
+        onPressed: onPressed,
+        style: TextButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+          minimumSize: Size.zero,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 22),
+            const SizedBox(height: 2),
+            Text(label, style: const TextStyle(fontSize: 11)),
           ],
         ),
       ),
