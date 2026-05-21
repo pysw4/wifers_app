@@ -1,9 +1,7 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:wifers_app/services/api_service.dart';
+import 'package:wifers_app/services/ap_data_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
 import 'package:wifers_app/pages/route_page.dart';
@@ -80,21 +78,7 @@ class _RecommendPageState extends State<RecommendPage> {
   }
 
   Future<List<Map<String, dynamic>>> _loadApsFromAsset() async {
-    final geojson = await rootBundle.loadString('geolocation_package/data/aps_geolocalizados_wgs84.geojson');
-    final Map<String, dynamic> data = json.decode(geojson) as Map<String, dynamic>;
-    final features = data['features'] as List<dynamic>;
-    return features.map<Map<String, dynamic>>((feature) {
-      final props = Map<String, dynamic>.from(feature['properties'] as Map);
-      final coords = feature['geometry']['coordinates'] as List<dynamic>;
-      return {
-        'id': props['USER_NOM_A']?.toString() ?? 'unknown',
-        'name': props['USER_NOM_A']?.toString() ?? 'AP',
-        'building': props['USER_EDIFI']?.toString() ?? props['Nom_Edific']?.toString() ?? 'Unknown',
-        'floor': props['Num_Planta'] is num ? (props['Num_Planta'] as num).toInt() : null,
-        'lat': (coords[1] as num).toDouble(),
-        'lng': (coords[0] as num).toDouble(),
-      };
-    }).toList();
+    return ApDataService.loadAllApsAsMaps();
   }
 
   Map<String, dynamic> _buildPredictionFeatures(Map<String, dynamic> ap, LatLng userLocation) {

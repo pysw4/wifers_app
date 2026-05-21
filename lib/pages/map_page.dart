@@ -1,12 +1,11 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:wifers_app/services/api_service.dart';
+import 'package:wifers_app/services/ap_data_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
 import 'package:wifers_app/models/ap_info.dart';
@@ -58,25 +57,7 @@ class _MapPageState extends State<MapPage> {
 
   Future<void> _loadAps() async {
     try {
-      final geojson = await rootBundle.loadString('geolocation_package/data/aps_geolocalizados_wgs84.geojson');
-      final Map<String, dynamic> data = json.decode(geojson) as Map<String, dynamic>;
-      final features = data['features'] as List<dynamic>;
-
-      final loaded = features.map<APInfo>((dynamic feature) {
-        final Map<String, dynamic> props = Map<String, dynamic>.from(feature['properties'] as Map);
-        final coords = feature['geometry']['coordinates'] as List<dynamic>;
-
-        return APInfo(
-          id: props['USER_NOM_A']?.toString(),
-          name: props['USER_NOM_A']?.toString(),
-          building: props['USER_EDIFI']?.toString() ?? props['Nom_Edific']?.toString() ?? 'Unknown',
-          height: props['Num_Planta'] is num ? (props['Num_Planta'] as num).toInt() : null,
-          espacio: props['USER_Espai']?.toString(),
-          lat: (coords[1] as num).toDouble(),
-          lng: (coords[0] as num).toDouble(),
-        );
-      }).toList();
-
+      final loaded = await ApDataService.loadAllAps();
       setState(() {
         _aps.clear();
         _aps.addAll(loaded);
