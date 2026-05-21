@@ -11,7 +11,6 @@ import 'package:wifers_app/services/storage_service.dart';
 import 'package:wifers_app/services/cache_service.dart';
 import 'package:wifers_app/models/ap_info.dart';
 import 'package:wifers_app/pages/route_page.dart';
-import 'package:wifers_app/pages/favorites_page.dart';
 import 'package:wifers_app/pages/ap_trend_dialog.dart';
 
 class MapPage extends StatefulWidget {
@@ -470,11 +469,6 @@ class _MapPageState extends State<MapPage> {
                   onPressed: () => _navigateToAP(ap),
                 ),
                 _buildActionButton(
-                  icon: Icons.directions_car,
-                  label: 'From Gate',
-                  onPressed: () => _navigateFromGate(ap),
-                ),
-                _buildActionButton(
                   icon: Icons.trending_up,
                   label: '24h Trend',
                   onPressed: () => _showAPTrend(ap),
@@ -646,41 +640,12 @@ class _MapPageState extends State<MapPage> {
   }
 
   /// Navigate from the campus main entrance to the target AP.
-  /// 当用户位置不可用时，弹出对话框询问是否从校门开始导航。
+  /// 直接从校门（campusGate）导航到目标AP，不检查用户当前位置。
   Future<void> _navigateFromGate(APInfo ap) async {
     // 先关闭 bottom sheet
     Navigator.of(context, rootNavigator: true).pop();
 
-    // 检查是否有可用位置
-    if (_currentLocation != null) {
-      // 用户有位置信息，直接使用当前位置导航
-      _navigateToAP(ap);
-      return;
-    }
-
-    // 位置不可用，弹出对话框询问是否从校门导航
     if (!mounted) return;
-    final startFromGate = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Location Unavailable'),
-        content: const Text(
-          'Your current location is not available.\n\n'
-          'Would you like to start navigation from the campus main entrance instead?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Start from Gate'),
-          ),
-        ],
-      ),
-    );
-    if (startFromGate != true) return;
 
     try {
       final routeResult = await _apiService.fetchAdvancedRoute(
@@ -917,39 +882,20 @@ class _MapPageState extends State<MapPage> {
           _buildHeatmapLegend(),
         ],
       ),
-      floatingActionButton: Column(
-        mainAxisAlignment: MainAxisAlignment.end,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          // Time picker — always visible since heatmap is always on
-          FloatingActionButton(
-            heroTag: 'time',
-            mini: true,
-            onPressed: _showHourPicker,
-            child: _isLoadingHeatmap
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Text(
-                    '${_selectedHour}h',
-                    style: const TextStyle(fontSize: 12),
-                  ),
-          ),
-          const SizedBox(height: 16),
-          FloatingActionButton.extended(
-            heroTag: 'favorites',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const FavoritesPage()),
-              );
-            },
-            icon: const Icon(Icons.favorite),
-            label: const Text('Favorites'),
-          ),
-        ],
+      floatingActionButton: FloatingActionButton(
+        heroTag: 'time',
+        mini: true,
+        onPressed: _showHourPicker,
+        child: _isLoadingHeatmap
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : Text(
+                '${_selectedHour}h',
+                style: const TextStyle(fontSize: 12),
+              ),
       ),
     );
   }

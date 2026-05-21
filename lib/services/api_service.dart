@@ -61,6 +61,7 @@ class ApiService {
     double destLat, {
     int acceptableRange = 500,
   }) async {
+    // Backend expects: /route/advanced/{lat}/{lng}/{dest_lat}/{dest_lng}
     final uri = Uri.parse('$baseUrl/route/advanced/$lat/$lng/$destLat/$destLng?acceptable_range=$acceptableRange');
     final response = await http.get(uri);
     if (response.statusCode == 200) {

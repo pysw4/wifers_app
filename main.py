@@ -247,6 +247,15 @@ def route(lat: float, lng: float, dest_lat: float, dest_lng: float):
         dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
         logger.info(f"Nearest nodes: source={source_node}, dest={dest_node}")
         
+        # 解析 AP 节点（字符串）为路网节点（整数）
+        dest_node = _resolve_to_road_node(G, dest_node, lat=dest_lat, lng=dest_lng)
+        source_node = _resolve_to_road_node(G, source_node, lat=lat, lng=lng)
+        
+        # 确保 source 和 dest 都是整数，否则无法路由
+        if isinstance(source_node, str) or isinstance(dest_node, str):
+            logger.warning(f"Cannot route with string nodes: source={source_node}, dest={dest_node}")
+            return {"path": []}
+        
         try:
             path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
         except nx.NetworkXNoPath:
@@ -257,7 +266,7 @@ def route(lat: float, lng: float, dest_lat: float, dest_lng: float):
         return {"path": path_coords}
     except Exception as e:
         logger.error(f"Route error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Routing error: {str(e)}")
+        return {"path": [], "message": f"Routing error: {str(e)}"}
 
 
 def _resolve_to_road_node(G, node_id, lat=None, lng=None):
@@ -319,6 +328,11 @@ def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acc
         # 如果 dest_node 是 AP 节点（字符串），解析为路网节点
         dest_node = _resolve_to_road_node(G, dest_node, lat=dest_lat, lng=dest_lng)
         source_node = _resolve_to_road_node(G, source_node, lat=lat, lng=lng)
+        
+        # 确保 source 和 dest 都是整数（路网节点），否则后续 shortest_path 会失败
+        if isinstance(source_node, str) or isinstance(dest_node, str):
+            logger.warning(f"Cannot route with string nodes: source={source_node}, dest={dest_node}")
+            return {"path": [], "alternatives": [], "message": "Cannot resolve nodes to road network"}
         
         # Find qualified nodes within acceptable range of destination
         qualified_candidates = find_qualified_in_range(
@@ -401,6 +415,12 @@ def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acc
             # 同样解析 AP 节点
             dest_node = _resolve_to_road_node(G, dest_node, lat=dest_lat, lng=dest_lng)
             source_node = _resolve_to_road_node(G, source_node, lat=lat, lng=lng)
+            
+            # 确保 source 和 dest 都是整数（路网节点），否则 shortest_path 会失败
+            if isinstance(source_node, str) or isinstance(dest_node, str):
+                logger.warning(f"Cannot use shortest_path with string nodes: source={source_node}, dest={dest_node}")
+                return {"path": [], "alternatives": [], "message": f"Routing failed: cannot resolve nodes to road network. {error_msg}"}
+            
             path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
             path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
             return {
