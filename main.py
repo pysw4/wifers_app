@@ -141,21 +141,34 @@ def _build_feature_dataframe(features: dict) -> pd.DataFrame:
     return pd.DataFrame([converted], columns=MODEL_FEATURES)
 
 
+def _to_prediction_label(prediction) -> str:
+    """将模型预测结果统一转换为 'Up' / 'Down' 字符串。
+    
+    兼容两种情况：
+    - 旧模型: classes_ = ['Down', 'Up']，predict 返回字符串
+    - 新模型: classes_ = [0, 1]，predict 返回整数
+    """
+    if prediction == 'Up' or prediction == 1:
+        return 'Up'
+    return 'Down'
+
+
 def _up_probability_from_proba(proba: np.ndarray) -> float:
     """Estimate AP signal strength from predicted Up probability."""
     if hasattr(ml_model, 'classes_'):
         try:
             classes = list(ml_model.classes_)
-            if 1 in classes:
-                return float(proba[classes.index(1)])
-            if 'Up' in classes:
-                return float(proba[classes.index('Up')])
+            # 兼容整数类标 [0, 1] 和字符串类标 ['Down', 'Up']
+            for up_label in [1, 'Up', 'up']:
+                if up_label in classes:
+                    return float(proba[classes.index(up_label)])
         except Exception:
             pass
     if proba.shape[-1] == 2:
         # Use the probability of the positive class when class labels are unknown.
-        return float(max(proba))
-    return float(max(proba))
+        # proba[1] 通常是正类概率
+        return float(proba[1])
+    return float(proba[-1])
 
 
 @app.get("/")
@@ -204,7 +217,7 @@ def predict_ap_status_batch(items: list[dict]):
         up_prob = _up_probability_from_proba(probability)
         predictions.append({
             'input': features,
-            'prediction': 'Up' if prediction == 'Up' else 'Down',
+            'prediction': _to_prediction_label(prediction),
             'confidence': round(float(max(probability)), 3),
             'up_probability': round(up_prob * 100, 1),
             'score': round(float(np.max(probability)), 3)
@@ -334,8 +347,22 @@ def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acc
         if not candidate_paths:
             return {"path": [], "alternatives": [], "message": "No paths found to candidates"}
         
-        # Sort candidates by cost (distance)
-        sorted_candidates = sorted(candidate_paths.items(), key=lambda x: x[1][0])
+        # Sort candidates by cost (distance) and filter out unreachable (inf cost)
+        # This prevents JSON serialization failure from float('inf') values
+        sorted_candidates = sorted(
+            ((c, (cost, path)) for c, (cost, path) in candidate_paths.items() if cost != float('inf')),
+            key=lambda x: x[1][0]
+        )
+        
+        if not sorted_candidates:
+            # All candidates are unreachable, fallback to basic shortest path routing
+            path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
+            path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
+            return {
+                "path": path_coords,
+                "alternatives": [],
+                "message": "All candidates unreachable, using direct path"
+            }
         
         # Best path (shortest)
         best_candidate, (best_cost, best_path) = sorted_candidates[0]
@@ -401,7 +428,7 @@ def predict_ap_status(features: dict):
     prediction = ml_model.predict(df)[0]
     prediction_proba = ml_model.predict_proba(df)[0]
     up_prob = _up_probability_from_proba(prediction_proba)
-    pred_label = 'Up' if prediction == 'Up' else 'Down'
+    pred_label = _to_prediction_label(prediction)
     confidence = float(max(prediction_proba))
 
     return {
