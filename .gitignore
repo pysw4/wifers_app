@@ -49,13 +49,14 @@ app.*.map.json
 cache/
 results/
 # precomputed/  # 取消注释以排除热力图预计算文件
-train_signal_model_v2.py
-train_signal_model.py
-find_paths.py
-helper_script.py
-predict.py
+
+# Old/unused scripts (replaced by retrain_classifier.py)
 predictor2_0.py
-main.py
+train_signal_model.py
+train_signal_model_v2.py
+
+# Deployment config (not needed in repo)
 requirements.txt
 render.yaml
 description.txt
+# geolocation_package/  # 取消注释以排除地理数据包
