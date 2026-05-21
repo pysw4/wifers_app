@@ -34,11 +34,9 @@ class _MapPageState extends State<MapPage> {
   final List<APInfo> _aps = [];
   
 
-  // Heatmap state (AP point mode)
-  bool _showHeatmap = false;
+  // Heatmap state — always on, loaded on init
   bool _isLoadingHeatmap = false;
   int _selectedHour = DateTime.now().hour;
-  Map<String, dynamic>? _heatmapData;
   final Map<String, Color> _signalColors = {
     'Excellent': const Color(0xFF00E676),  // Bright Green (strongest signal)
     'Good': const Color(0xFF76FF03),       // Light Green
@@ -52,7 +50,6 @@ class _MapPageState extends State<MapPage> {
   Timer? _heatmapRefreshTimer;
 
   // Smooth heatmap state (grid mode) - loaded together with AP heatmap data
-  bool _showSmoothHeatmap = false;
   List<Map<String, dynamic>> _smoothHeatmapPoints = [];
 
   Future<void> _loadAps() async {
@@ -100,7 +97,7 @@ class _MapPageState extends State<MapPage> {
 
   /// 热力图模式下是否显示 AP 标记（缩放太小时只显示热力图网格不显示点）
   bool get _shouldShowMarkers {
-    if (_showSmoothHeatmap && _currentZoom < 12) return false;
+    if (_smoothHeatmapPoints.isNotEmpty && _currentZoom < 12) return false;
     return true;
   }
 
@@ -109,7 +106,7 @@ class _MapPageState extends State<MapPage> {
     final markerSize = _getMarkerSize();
     final heatmapSize = _getMarkerSize(isHeatmap: true);
     final heatmapTextSize = _getHeatmapTextSize();
-    final isHeatmapVisible = _showHeatmap && _heatmapCache.isNotEmpty;
+    final isHeatmapVisible = _heatmapCache.isNotEmpty;
 
     if (!_shouldShowMarkers) return _currentLocationMarker;
     
@@ -211,6 +208,7 @@ class _MapPageState extends State<MapPage> {
     super.initState();
     _startLocationTracking();
     _loadAps();
+    _loadHeatmap();
   }
 
   @override
@@ -306,27 +304,11 @@ class _MapPageState extends State<MapPage> {
 
     setState(() {
       _heatmapCache = cache;
-      _heatmapData = data;
       _smoothHeatmapPoints = parsedSmoothPoints;
-      _showHeatmap = true;
-      _showSmoothHeatmap = true;
       _isLoadingHeatmap = false;
     });
 
     debugPrint('Loaded ${cache.length} AP points + ${parsedSmoothPoints.length} grid points');
-  }
-
-  void _toggleHeatmap() {
-    if (_showHeatmap) {
-      setState(() {
-        _showHeatmap = false;
-        _showSmoothHeatmap = false;
-        _heatmapCache = {};
-        _smoothHeatmapPoints = [];
-      });
-    } else {
-      _loadHeatmap();
-    }
   }
 
   Future<void> _showHourPicker() async {
@@ -376,9 +358,7 @@ class _MapPageState extends State<MapPage> {
       setState(() {
         _selectedHour = result;
       });
-      if (_showHeatmap) {
-        _loadHeatmap(); // Refresh with new time (loads both AP points and smooth grid)
-      }
+      _loadHeatmap(); // Refresh with new time (loads both AP points and smooth grid)
     }
   }
 
@@ -641,8 +621,7 @@ class _MapPageState extends State<MapPage> {
   }
 
   Widget _buildHeatmapLegend() {
-    // Smooth heatmap legend
-    if (_showSmoothHeatmap && _smoothHeatmapPoints.isNotEmpty) {
+    if (_smoothHeatmapPoints.isNotEmpty) {
       return Positioned(
         top: 10,
         right: 10,
@@ -660,9 +639,8 @@ class _MapPageState extends State<MapPage> {
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                 ),
                 Text(
-                  '$_selectedHour:00 (Smooth)',
+                  '$_selectedHour:00',
                   style: const TextStyle(fontSize: 11, color: Colors.grey),
-
                 ),
                 const Divider(height: 8),
                 for (final entry in _signalColors.entries)
@@ -699,76 +677,7 @@ class _MapPageState extends State<MapPage> {
         ),
       );
     }
-    
-    // Point heatmap legend
-    if (!_showHeatmap || _heatmapData == null) return const SizedBox.shrink();
-    
-    final legend = _heatmapData!['legend'] as Map<String, dynamic>?;
-    if (legend == null) return const SizedBox.shrink();
-    
-    final apPointsData = _heatmapData!['ap_points'] as Map<String, dynamic>? ?? {};
-    final totalPoints = apPointsData['total'] ?? 0;
-    final buildingsCount = apPointsData['buildings_count'] ?? 0;
-    
-    return Positioned(
-      top: 10,
-      right: 10,
-      child: Card(
-        elevation: 4,
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          width: 160,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Signal Strength',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-              ),
-              Text(
-                '$_selectedHour:00',
-
-                style: const TextStyle(fontSize: 11, color: Colors.grey),
-              ),
-              const Divider(height: 8),
-              for (final entry in legend.entries)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 12,
-                        height: 12,
-                        decoration: BoxDecoration(
-                          color: _signalColors[entry.key] ?? Colors.grey,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          entry.key,
-                          style: const TextStyle(fontSize: 11),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              const Divider(height: 8),
-              Text(
-                '$totalPoints APs',
-                style: const TextStyle(fontSize: 10, color: Colors.grey),
-              ),
-              Text(
-                '$buildingsCount buildings',
-                style: const TextStyle(fontSize: 10, color: Colors.grey),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    return const SizedBox.shrink();
   }
 
   @override
@@ -807,10 +716,9 @@ class _MapPageState extends State<MapPage> {
                 userAgentPackageName: 'com.uab.wifers',
               ),
               // Smooth heatmap grid overlay (rendered below markers)
-              if (_showSmoothHeatmap)
-                PolygonLayer(
-                  polygons: _smoothHeatmapPolygons,
-                ),
+              PolygonLayer(
+                polygons: _smoothHeatmapPolygons,
+              ),
               MarkerLayer(
                 markers: _markers,
               ),
@@ -824,36 +732,22 @@ class _MapPageState extends State<MapPage> {
         mainAxisAlignment: MainAxisAlignment.end,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Heatmap toggle button (loads both AP points and smooth grid)
+          // Time picker — always visible since heatmap is always on
           FloatingActionButton(
-            heroTag: 'heatmap',
+            heroTag: 'time',
             mini: true,
-            onPressed: _toggleHeatmap,
-            backgroundColor: _showHeatmap ? Colors.blue : null,
+            onPressed: _showHourPicker,
             child: _isLoadingHeatmap
                 ? const SizedBox(
                     width: 20,
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : Icon(
-                    Icons.layers,
-                    color: _showHeatmap ? Colors.white : null,
+                : Text(
+                    '${_selectedHour}h',
+                    style: const TextStyle(fontSize: 12),
                   ),
           ),
-          if (_showHeatmap) ...[
-            const SizedBox(height: 8),
-            // Time picker
-            FloatingActionButton(
-              heroTag: 'time',
-              mini: true,
-              onPressed: _showHourPicker,
-              child: Text(
-                '${_selectedHour}h',
-                style: const TextStyle(fontSize: 12),
-              ),
-            ),
-          ],
           const SizedBox(height: 16),
           FloatingActionButton.extended(
             heroTag: 'favorites',
