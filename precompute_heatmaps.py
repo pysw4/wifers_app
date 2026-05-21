@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-预计算热力图数据脚本
-一次性生成所有 24 小时的热力图数据（AP 点 + 平滑网格合并到一个文件），
+预计算热力图数据脚本（支持 weekday/weekend 区分）
+一次性生成 48 个热力图文件（24 小时 × 2 种日期类型），
 保存为静态 JSON 文件，API 直接读取返回，实现毫秒级响应。
 
 用法:
@@ -9,7 +9,10 @@
 
 输出:
     precomputed/
-        heatmap_h0.json  ~  heatmap_h23.json   (24 个文件，每个包含 AP 点和网格点)
+        weekday/
+            heatmap_h0.json  ~  heatmap_h23.json   (24 个文件)
+        weekend/
+            heatmap_h0.json  ~  heatmap_h23.json   (24 个文件)
 """
 
 import json
@@ -38,7 +41,7 @@ UAB_bbox = 41.50736, 41.49505, 2.11543, 2.09491  # north, south, east, west
 # 加载模型和编码器
 # =====================================================================
 print("=" * 60)
-print("Pre-computing heatmap data for all 24 hours")
+print("Pre-computing heatmap data for all 24 hours × weekday/weekend")
 print("=" * 60)
 
 print("\n[1] Loading signal strength model...")
@@ -80,9 +83,9 @@ def encode_building(building_name: str) -> int:
     return 0
 
 # =====================================================================
-# 构建 AP 点列表（所有 AP 的经纬度 + 各小时的信号强度）
+# 构建 AP 点列表
 # =====================================================================
-print("\n[3] Computing signal strength for all APs × 24 hours...")
+print("\n[3] Computing signal strength for all APs × 24 hours × 2 day types...")
 
 # 先提取所有 AP 的基础信息
 ap_points_base = []
@@ -108,34 +111,37 @@ print(f"  Total APs with valid building: {len(ap_points_base)}")
 for ap in ap_points_base:
     ap['building_code'] = encode_building(ap['building'])
 
-# 批量预测所有 AP × 24 小时
+# 批量预测所有 AP × 24 小时 × 2 种日期类型
 all_hours = list(range(24))
-total_predictions = len(ap_points_base) * len(all_hours)
+day_types = [('weekday', 0), ('weekend', 1)]
+total_predictions = len(ap_points_base) * len(all_hours) * len(day_types)
 
 print(f"  Total predictions needed: {total_predictions}")
 print(f"  Predicting...")
 
 start_time = time.time()
 
-# 为每个小时构建特征矩阵
-for hour in all_hours:
-    rows = []
-    for ap in ap_points_base:
-        rows.append({
-            'building_code': ap['building_code'],
-            'floor': ap['floor'],
-            'hour': float(hour),
-            'band': 5.0,  # 固定使用 5GHz 作为总信号强度
-        })
-    
-    df = pd.DataFrame(rows)
-    predictions = signal_model.predict(df)
-    
-    # 将预测结果写回 ap_points_base
-    for i, ap in enumerate(ap_points_base):
-        if 'signal_by_hour' not in ap:
-            ap['signal_by_hour'] = {}
-        ap['signal_by_hour'][hour] = float(predictions[i])
+# 为每个小时 + 日期类型构建特征矩阵
+for day_type_name, is_weekend in day_types:
+    for hour in all_hours:
+        rows = []
+        for ap in ap_points_base:
+            rows.append({
+                'building_code': ap['building_code'],
+                'floor': ap['floor'],
+                'hour': float(hour),
+                'band': 5.0,  # 固定使用 5GHz 作为总信号强度
+            })
+        
+        df = pd.DataFrame(rows)
+        predictions = signal_model.predict(df)
+        
+        # 将预测结果写回 ap_points_base
+        key = f'{day_type_name}_h{hour}'
+        for i, ap in enumerate(ap_points_base):
+            if 'signal_by_hour' not in ap:
+                ap['signal_by_hour'] = {}
+            ap['signal_by_hour'][key] = float(predictions[i])
 
 elapsed = time.time() - start_time
 print(f"  Done in {elapsed:.1f} seconds ({total_predictions/elapsed:.0f} predictions/sec)")
@@ -156,10 +162,9 @@ def dbm_to_quality(dbm: float) -> dict:
         return {"quality": "Very Poor", "bars": 1}
 
 # =====================================================================
-# 生成并保存合并的热力图数据（每个小时一个文件）
+# 生成并保存合并的热力图数据（每个小时 × 日期类型一个文件）
 # =====================================================================
 print("\n[4] Generating merged heatmap data (AP points + smooth grid)...")
-os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # 平滑网格参数
 north, south, east, west = UAB_bbox
@@ -212,83 +217,91 @@ legend = {
     "Very Poor": {"min_db": -100, "max_db": -80, "color": "darkred", "bars": 1},
 }
 
-for hour in all_hours:
-    # --- AP 点数据 ---
-    heatmap_points = []
-    processed_buildings = set()
+for day_type_name, is_weekend in day_types:
+    day_dir = OUTPUT_DIR / day_type_name
+    os.makedirs(day_dir, exist_ok=True)
     
-    for ap in ap_points_base:
-        signal_db = ap['signal_by_hour'][hour]
-        quality_info = dbm_to_quality(signal_db)
+    for hour in all_hours:
+        key = f'{day_type_name}_h{hour}'
         
-        heatmap_points.append({
-            "lat": ap['lat'],
-            "lng": ap['lng'],
-            "signal_db": round(signal_db, 1),
-            "signal_quality": quality_info["quality"],
-            "bars": quality_info["bars"],
-            "ap_name": ap['ap_name'],
-            "building": ap['building'],
-            "floor": int(ap['floor']),
-        })
-        processed_buildings.add(ap['building'])
-    
-    # --- 平滑网格数据 ---
-    ap_points_for_idw = []
-    for ap in ap_points_base:
-        ap_points_for_idw.append({
-            'lat': ap['lat'],
-            'lng': ap['lng'],
-            'signal_db': ap['signal_by_hour'][hour],
-            'building': ap['building'],
-            'floor': int(ap['floor']),
-        })
-    
-    smooth_points = []
-    for lat in lat_grid:
-        for lng in lng_grid:
-            signal = idw_interpolate(lat, lng, ap_points_for_idw, power=2)
-            if signal is None:
-                continue
+        # --- AP 点数据 ---
+        heatmap_points = []
+        processed_buildings = set()
+        
+        for ap in ap_points_base:
+            signal_db = ap['signal_by_hour'][key]
+            quality_info = dbm_to_quality(signal_db)
             
-            quality_info = dbm_to_quality(signal)
-            smooth_points.append({
-                "lat": round(lat, 6),
-                "lng": round(lng, 6),
-                "signal_db": round(signal, 1),
+            heatmap_points.append({
+                "lat": ap['lat'],
+                "lng": ap['lng'],
+                "signal_db": round(signal_db, 1),
                 "signal_quality": quality_info["quality"],
                 "bars": quality_info["bars"],
+                "ap_name": ap['ap_name'],
+                "building": ap['building'],
+                "floor": int(ap['floor']),
             })
-    
-    # --- 合并输出 ---
-    result = {
-        "type": "heatmap",
-        "hour": hour,
-        "ap_points": {
-            "total": len(heatmap_points),
-            "buildings_count": len(processed_buildings),
-            "buildings": sorted(list(processed_buildings)),
-            "points": heatmap_points,
-        },
-        "smooth_grid": {
-            "total": len(smooth_points),
-            "grid_size": {"rows": resolution, "cols": resolution},
-            "bounds": {
-                "north": lat_max,
-                "south": lat_min,
-                "east": lng_max,
-                "west": lng_min,
+            processed_buildings.add(ap['building'])
+        
+        # --- 平滑网格数据 ---
+        ap_points_for_idw = []
+        for ap in ap_points_base:
+            ap_points_for_idw.append({
+                'lat': ap['lat'],
+                'lng': ap['lng'],
+                'signal_db': ap['signal_by_hour'][key],
+                'building': ap['building'],
+                'floor': int(ap['floor']),
+            })
+        
+        smooth_points = []
+        for lat in lat_grid:
+            for lng in lng_grid:
+                signal = idw_interpolate(lat, lng, ap_points_for_idw, power=2)
+                if signal is None:
+                    continue
+                
+                quality_info = dbm_to_quality(signal)
+                smooth_points.append({
+                    "lat": round(lat, 6),
+                    "lng": round(lng, 6),
+                    "signal_db": round(signal, 1),
+                    "signal_quality": quality_info["quality"],
+                    "bars": quality_info["bars"],
+                })
+        
+        # --- 合并输出 ---
+        result = {
+            "type": "heatmap",
+            "hour": hour,
+            "day_type": day_type_name,
+            "ap_points": {
+                "total": len(heatmap_points),
+                "buildings_count": len(processed_buildings),
+                "buildings": sorted(list(processed_buildings)),
+                "points": heatmap_points,
             },
-            "points": smooth_points,
-        },
-        "legend": legend,
-    }
-    
-    output_path = OUTPUT_DIR / f'heatmap_h{hour}.json'
-    with open(output_path, 'w') as f:
-        json.dump(result, f)
-    
-    print(f"  Saved heatmap_h{hour}.json ({len(heatmap_points)} AP points + {len(smooth_points)} grid points)")
+            "smooth_grid": {
+                "total": len(smooth_points),
+                "grid_size": {"rows": resolution, "cols": resolution},
+                "bounds": {
+                    "north": lat_max,
+                    "south": lat_min,
+                    "east": lng_max,
+                    "west": lng_min,
+                },
+                "points": smooth_points,
+            },
+            "legend": legend,
+        }
+        
+        output_path = day_dir / f'heatmap_h{hour}.json'
+        with open(output_path, 'w') as f:
+            json.dump(result, f)
+        
+        print(f"  Saved {day_type_name}/heatmap_h{hour}.json "
+              f"({len(heatmap_points)} AP points + {len(smooth_points)} grid points)")
 
 # =====================================================================
 # 完成
@@ -296,5 +309,6 @@ for hour in all_hours:
 print("\n" + "=" * 60)
 print("Done! All heatmap data pre-computed.")
 print(f"Output directory: {OUTPUT_DIR}")
-print(f"Total files: {len(all_hours)} (heatmap_h0.json ~ heatmap_h{all_hours[-1]}.json)")
+print(f"Total files: {len(all_hours) * len(day_types)} "
+      f"({len(day_types)} day types × {len(all_hours)} hours)")
 print("=" * 60)

@@ -46,9 +46,7 @@ app.*.map.json
 
 # Python generated data files
 *.csv
-*.joblib
 cache/
-models/
 results/
 precomputed/
 train_signal_model_v2.py

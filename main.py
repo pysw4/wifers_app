@@ -376,16 +376,26 @@ PRECOMPUTED_DIR = BASE_DIR / 'precomputed'
 _heatmap_cache: dict = {}
 
 
+def _get_day_type() -> str:
+    """根据当前日期返回 'weekday' 或 'weekend'"""
+    from datetime import datetime
+    today = datetime.now()
+    return 'weekend' if today.weekday() >= 5 else 'weekday'
+
+
 def _load_precomputed_heatmap(hour: int) -> dict:
-    """从预计算文件加载 heatmap 数据（包含 AP 点和平滑网格）"""
-    if hour not in _heatmap_cache:
-        filepath = PRECOMPUTED_DIR / f'heatmap_h{hour}.json'
+    """从预计算文件加载 heatmap 数据（自动区分 weekday/weekend）"""
+    day_type = _get_day_type()
+    cache_key = f'{day_type}_{hour}'
+    
+    if cache_key not in _heatmap_cache:
+        filepath = PRECOMPUTED_DIR / day_type / f'heatmap_h{hour}.json'
         if not filepath.exists():
-            raise HTTPException(status_code=500, detail=f"Precomputed heatmap not found for hour {hour}")
+            raise HTTPException(status_code=500, detail=f"Precomputed heatmap not found for {day_type}/hour {hour}")
         with open(filepath) as f:
             import json
-            _heatmap_cache[hour] = json.load(f)
-    return _heatmap_cache[hour]
+            _heatmap_cache[cache_key] = json.load(f)
+    return _heatmap_cache[cache_key]
 
 
 @app.get("/predict/signal_strength/heatmap")
@@ -393,6 +403,7 @@ def get_signal_heatmap(hour: int = -1):
     """
     获取热力图数据（从预计算文件读取，毫秒级响应）
     
+    自动根据当前日期区分 weekday/weekend，返回对应的热力图数据。
     返回包含两种数据：
     - ap_points: 每个 AP 点的信号强度预测
     - smooth_grid: IDW 插值的平滑网格
