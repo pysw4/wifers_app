@@ -247,6 +247,46 @@ def route(lat: float, lng: float, dest_lat: float, dest_lng: float):
         raise HTTPException(status_code=500, detail=f"Routing error: {str(e)}")
 
 
+def _resolve_to_road_node(G, node_id, lat=None, lng=None):
+    """
+    如果 node_id 是 AP 节点（字符串类型），找到它最近的 OSM 路网节点。
+    OSM 路网节点是整数类型，且没有 'node_type' 属性（或 node_type 不是 'ap'/'indoor'）。
+    """
+    # 如果节点已经是整数（OSM 路网节点），直接返回
+    if isinstance(node_id, int):
+        return node_id
+    
+    # 如果是字符串节点（AP 或室内节点），找最近的 OSM 路网节点
+    logger.info(f"Node '{node_id}' is a string node, finding nearest road node")
+    
+    # 获取该节点的坐标
+    if node_id in G:
+        node_lat = G.nodes[node_id].get('y', lat)
+        node_lng = G.nodes[node_id].get('x', lng)
+    else:
+        node_lat = lat
+        node_lng = lng
+    
+    if node_lat is None or node_lng is None:
+        # 没有坐标信息，返回原始节点
+        return node_id
+    
+    # 只从 OSM 路网节点中找最近（整数节点，且没有 node_type 属性）
+    road_nodes = [n for n in G.nodes() if isinstance(n, int)]
+    if not road_nodes:
+        return node_id
+    
+    # 用 osmnx 的 nearest_nodes 只搜索路网节点
+    try:
+        road_subgraph = G.subgraph(road_nodes)
+        nearest = ox.distance.nearest_nodes(road_subgraph, node_lng, node_lat)
+        logger.info(f"Resolved '{node_id}' -> road node {nearest}")
+        return nearest
+    except Exception as e:
+        logger.warning(f"Failed to resolve node '{node_id}' to road node: {e}")
+        return node_id
+
+
 @app.get("/route/advanced/{lat}/{lng}/{dest_lat}/{dest_lng}")
 def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acceptable_range: int = 500):
     """
@@ -262,6 +302,10 @@ def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acc
     try:
         source_node = ox.distance.nearest_nodes(G, lng, lat)
         dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
+        
+        # 如果 dest_node 是 AP 节点（字符串），解析为路网节点
+        dest_node = _resolve_to_road_node(G, dest_node, lat=dest_lat, lng=dest_lng)
+        source_node = _resolve_to_road_node(G, source_node, lat=lat, lng=lng)
         
         # Find qualified nodes within acceptable range of destination
         qualified_candidates = find_qualified_in_range(
@@ -327,6 +371,9 @@ def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acc
         try:
             source_node = ox.distance.nearest_nodes(G, lng, lat)
             dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
+            # 同样解析 AP 节点
+            dest_node = _resolve_to_road_node(G, dest_node, lat=dest_lat, lng=dest_lng)
+            source_node = _resolve_to_road_node(G, source_node, lat=lat, lng=lng)
             path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
             path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
             return {
