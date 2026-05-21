@@ -226,7 +226,7 @@ class _PredictorPageState extends State<PredictorPage> {
                   ),
                 ),
 
-              if ((!hasAp && _showManualForm) || hasAp) ...[
+              if (hasAp || _showManualForm) ...[
                 const SizedBox(height: 16),
                 const Text(
                   'Enter AP Features for Status Prediction',

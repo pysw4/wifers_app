@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:wifers_app/models/ap_info.dart';
 import 'package:wifers_app/services/storage_service.dart';
-import 'package:wifers_app/services/api_service.dart';
 import 'package:wifers_app/services/location_service.dart';
+import 'package:wifers_app/services/api_service.dart';
 import 'package:wifers_app/pages/route_page.dart';
+import 'package:wifers_app/pages/predictor_page.dart';
 
 class FavoritesPage extends StatefulWidget {
   const FavoritesPage({super.key});
@@ -99,73 +100,13 @@ class _FavoritesPageState extends State<FavoritesPage> {
     }
   }
 
-  Future<void> _predictAP(APInfo ap) async {
-    try {
-      final features = {
-        'client_count': 10,
-        'cpu_utilization': 50.0,
-        'mem_free': 1000.0,
-        'mem_total': 2000.0,
-        'last_modified': DateTime.now().toUtc().millisecondsSinceEpoch / 1000,
-        'hour': DateTime.now().hour.toDouble(),
-        'mem_usage': 50.0,
-        'overloaded': 0,
-      };
-      
-      final result = await _apiService.predictAPStatus(features);
-      final predictedStatus = result['prediction'] ?? 'unknown';
-      final confidence = (result['confidence'] as num?)?.toDouble() ?? 0.0;
-
-      if (!mounted) return;
-
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text('AP Status Prediction'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('AP: ${ap.name ?? 'Unknown'}'),
-              const SizedBox(height: 8),
-              Text('Building: ${ap.building}'),
-              if (ap.height != null) Text('Floor: ${ap.height}'),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Icon(
-                    Icons.wifi,
-                    color: predictedStatus == 'Up' ? Colors.green : Colors.red,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Status: $predictedStatus',
-                    style: TextStyle(
-                      fontWeight: FontWeight.bold,
-                      color: predictedStatus == 'Up' ? Colors.green : Colors.red,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text('Confidence: ${(confidence * 100).toStringAsFixed(1)}%'),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Close'),
-            ),
-          ],
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Prediction error: $e')),
-        );
-      }
-    }
+  void _predictAP(APInfo ap) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PredictorPage(selectedAp: ap),
+      ),
+    );
   }
 
   @override
