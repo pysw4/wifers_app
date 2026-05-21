@@ -274,11 +274,7 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
     如果 node_id 是 AP 节点（字符串类型），找到它最近的 OSM 路网节点。
     OSM 路网节点是整数类型。
     
-    策略：
-    1. 先用 ox.distance.nearest_nodes 在整个图上查找
-    2. 如果返回的是整数（路网节点），直接返回
-    3. 如果返回的是字符串（AP节点），用 ox.distance.nearest_nodes 在只包含路网节点的子图上查找
-    4. 如果还不行，用欧几里得距离手动找最近的路网节点
+    使用欧几里得距离手动找最近的路网节点，避免 ox.distance.nearest_nodes 的兼容性问题。
     """
     # 如果节点已经是整数（OSM 路网节点），直接返回
     if isinstance(node_id, (int, np.integer)):
@@ -296,48 +292,42 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
         node_lng = lng
     
     if node_lat is None or node_lng is None:
+        logger.warning(f"Node '{node_id}' has no coordinates, cannot resolve")
         return node_id
     
     # 收集所有路网节点（整数类型，包括 numpy 整数）
     road_nodes = [n for n in G.nodes() if isinstance(n, (int, np.integer))]
     if not road_nodes:
-        logger.warning(f"No road nodes found in graph!")
+        logger.warning(f"No road nodes found in graph! Total nodes: {len(G.nodes())}")
         return node_id
     
-    # 策略1: 用 ox.distance.nearest_nodes 在只包含路网节点的子图上查找
-    # 注意：必须在子图上查找，否则 nearest_nodes 可能返回 AP 节点
-    try:
-        road_subgraph = G.subgraph(road_nodes)
-        nearest = ox.distance.nearest_nodes(road_subgraph, node_lng, node_lat)
-        if isinstance(nearest, (int, np.integer)):
-            nearest = int(nearest)
-            logger.info(f"Resolved '{node_id}' -> road node {nearest}")
-            return nearest
-        else:
-            logger.warning(f"ox.nearest_nodes on subgraph returned string node '{nearest}', falling back to manual search")
-    except Exception as e:
-        logger.warning(f"ox.nearest_nodes on subgraph failed: {e}, falling back to manual search")
+    logger.info(f"Searching among {len(road_nodes)} road nodes for nearest to ({node_lat}, {node_lng})")
     
-    # 策略2: 手动计算欧几里得距离找最近的路网节点
+    # 手动计算欧几里得距离找最近的路网节点
     try:
         import math
         best_node = None
         best_dist = float('inf')
         for rn in road_nodes:
-            rn_lat = G.nodes[rn].get('y', 0)
-            rn_lng = G.nodes[rn].get('x', 0)
-            dist = (rn_lat - node_lat)**2 + (rn_lng - node_lng)**2
-            if dist < best_dist:
-                best_dist = dist
-                best_node = rn
+            try:
+                rn_lat = G.nodes[rn].get('y', None)
+                rn_lng = G.nodes[rn].get('x', None)
+                if rn_lat is None or rn_lng is None:
+                    continue
+                dist = (rn_lat - node_lat)**2 + (rn_lng - node_lng)**2
+                if dist < best_dist:
+                    best_dist = dist
+                    best_node = rn
+            except Exception:
+                continue
         if best_node is not None:
             best_node = int(best_node)
-            logger.info(f"Resolved '{node_id}' -> road node {best_node} (manual, dist={math.sqrt(best_dist):.6f})")
+            logger.info(f"Resolved '{node_id}' -> road node {best_node} (euclidean dist={math.sqrt(best_dist):.6f})")
             return best_node
     except Exception as e:
         logger.warning(f"Manual road node search failed: {e}")
     
-    logger.warning(f"Failed to resolve '{node_id}' to any road node, returning original")
+    logger.warning(f"Failed to resolve '{node_id}' to any road node")
     return node_id
 
 
