@@ -1,5 +1,0 @@
-model,accuracy,f1_down,precision_down,recall_down,training_time_s
-Random Forest (100),0.9999,0.9992,0.9995,0.9988,16.8
-Decision Tree,0.9999,0.9991,0.9993,0.9989,6.0
-Random Forest (200),0.9999,0.9991,0.9996,0.9986,32.7
-Logistic Regression,0.8013,0.3421,0.2102,0.9186,1.1
