@@ -327,8 +327,9 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
         best_dist = float('inf')
         for rn in road_nodes:
             try:
-                rn_lat = G.nodes[rn].get('y', None)
-                rn_lng = G.nodes[rn].get('x', None)
+                # OSM 节点可能使用 'y'/'x' 或 'lat'/'lon' 键
+                rn_lat = G.nodes[rn].get('y', G.nodes[rn].get('lat', None))
+                rn_lng = G.nodes[rn].get('x', G.nodes[rn].get('lon', None))
                 if rn_lat is None or rn_lng is None:
                     continue
                 dist = (rn_lat - node_lat)**2 + (rn_lng - node_lng)**2
