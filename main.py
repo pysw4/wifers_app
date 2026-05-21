@@ -204,7 +204,7 @@ def predict_ap_status_batch(items: list[dict]):
         up_prob = _up_probability_from_proba(probability)
         predictions.append({
             'input': features,
-            'prediction': 'Up' if prediction == 1 else 'Down',
+            'prediction': 'Up' if prediction == 'Up' else 'Down',
             'confidence': round(float(max(probability)), 3),
             'up_probability': round(up_prob * 100, 1),
             'score': round(float(np.max(probability)), 3)
@@ -401,7 +401,7 @@ def predict_ap_status(features: dict):
     prediction = ml_model.predict(df)[0]
     prediction_proba = ml_model.predict_proba(df)[0]
     up_prob = _up_probability_from_proba(prediction_proba)
-    pred_label = 'Up' if prediction == 1 else 'Down'
+    pred_label = 'Up' if prediction == 'Up' else 'Down'
     confidence = float(max(prediction_proba))
 
     return {
