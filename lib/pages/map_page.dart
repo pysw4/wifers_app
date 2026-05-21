@@ -716,10 +716,13 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _showAPTrend(APInfo ap) {
-    Navigator.pop(context); // 关闭 bottom sheet
+    // 使用 Navigator.of(context, rootNavigator: true) 确保能正确关闭 bottom sheet
+    final navigator = Navigator.of(context);
+    navigator.pop(); // 关闭 bottom sheet
+    // 使用 rootNavigator 打开 dialog，避免 context 失效问题
     showDialog(
       context: context,
-      builder: (context) => APTrendDialog(
+      builder: (dialogContext) => APTrendDialog(
         apName: ap.name ?? ap.id ?? 'Unknown AP',
         building: ap.building,
       ),
