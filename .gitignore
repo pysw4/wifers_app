@@ -48,7 +48,7 @@ app.*.map.json
 *.csv
 cache/
 results/
-precomputed/
+# precomputed/  # 取消注释以排除热力图预计算文件
 train_signal_model_v2.py
 train_signal_model.py
 find_paths.py
