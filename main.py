@@ -50,6 +50,7 @@ app = FastAPI(lifespan=lifespan)
 # Global variables for lazy-loaded resources
 G = None
 G_AP_nodes = None
+G_road = None  # 只包含路网节点（整数节点）的子图，用于 nearest_nodes 查询
 ml_model = None
 model_path = None
 _initialized = False
@@ -74,7 +75,7 @@ FALLBACK_MODEL_PATH = Path.cwd() / 'models' / MODEL_FILE_NAME
 
 def init_graph(force: bool = False):
     """Initialize the OSM graph and AP nodes (lazy-loaded)."""
-    global G, G_AP_nodes
+    global G, G_AP_nodes, G_road
     if G is not None and not force:
         return G, G_AP_nodes
 
@@ -82,6 +83,12 @@ def init_graph(force: bool = False):
     # bbox format: (left, bottom, right, top) = (west, south, east, north)
     osm_bbox = (UAB_bbox[3], UAB_bbox[1], UAB_bbox[2], UAB_bbox[0])
     G = ox.graph_from_bbox(bbox=osm_bbox, network_type="walk")
+    
+    # 创建只包含路网节点（整数节点）的子图，用于 nearest_nodes 查询
+    # 这样 ox.distance.nearest_nodes 永远不会返回 AP 字符串节点
+    road_nodes = [n for n in G.nodes() if not isinstance(n, str)]
+    G_road = G.subgraph(road_nodes).copy()
+    logger.info(f"Created road subgraph with {len(G_road.nodes())} nodes")
     
     logger.info("Adding AP nodes to graph...")
     G_AP_nodes = add_aps_to_graph(G, bbox=[UAB_bbox[3], UAB_bbox[0], UAB_bbox[2], UAB_bbox[1]])
@@ -243,18 +250,10 @@ def route(lat: float, lng: float, dest_lat: float, dest_lng: float):
     
     logger.info(f"Route request: from ({lat}, {lng}) to ({dest_lat}, {dest_lng})")
     try:
-        source_node = ox.distance.nearest_nodes(G, lng, lat)
-        dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
-        logger.info(f"Nearest nodes: source={source_node}, dest={dest_node}")
-        
-        # 解析 AP 节点（字符串）为路网节点（整数）
-        dest_node = _resolve_to_road_node(G, dest_node, lat=dest_lat, lng=dest_lng)
-        source_node = _resolve_to_road_node(G, source_node, lat=lat, lng=lng)
-        
-        # 确保 source 和 dest 都是整数，否则无法路由
-        if isinstance(source_node, str) or isinstance(dest_node, str):
-            logger.warning(f"Cannot route with string nodes: source={source_node}, dest={dest_node}")
-            return {"path": []}
+        # 使用 G_road（只包含路网节点的子图）查找最近节点，确保不会返回 AP 字符串节点
+        source_node = int(ox.distance.nearest_nodes(G_road, lng, lat))
+        dest_node = int(ox.distance.nearest_nodes(G_road, dest_lng, dest_lat))
+        logger.info(f"Nearest road nodes: source={source_node}, dest={dest_node}")
         
         try:
             path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
@@ -362,17 +361,10 @@ def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acc
     error_msg = ""  # Store error for fallback message
     
     try:
-        source_node = ox.distance.nearest_nodes(G, lng, lat)
-        dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
-        
-        # 如果 dest_node 是 AP 节点（字符串），解析为路网节点
-        dest_node = _resolve_to_road_node(G, dest_node, lat=dest_lat, lng=dest_lng)
-        source_node = _resolve_to_road_node(G, source_node, lat=lat, lng=lng)
-        
-        # 确保 source 和 dest 都是整数（路网节点），否则后续 shortest_path 会失败
-        if isinstance(source_node, str) or isinstance(dest_node, str):
-            logger.warning(f"Cannot route with string nodes: source={source_node}, dest={dest_node}")
-            return {"path": [], "alternatives": [], "message": "Cannot resolve nodes to road network"}
+        # 使用 G_road（只包含路网节点的子图）查找最近节点，确保不会返回 AP 字符串节点
+        source_node = int(ox.distance.nearest_nodes(G_road, lng, lat))
+        dest_node = int(ox.distance.nearest_nodes(G_road, dest_lng, dest_lat))
+        logger.info(f"Advanced route: source={source_node}, dest={dest_node}")
         
         # Find qualified nodes within acceptable range of destination
         qualified_candidates = find_qualified_in_range(
@@ -402,7 +394,6 @@ def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acc
             return {"path": [], "alternatives": [], "message": "No paths found to candidates"}
         
         # Sort candidates by cost (distance) and filter out unreachable (inf cost)
-        # This prevents JSON serialization failure from float('inf') values
         sorted_candidates = sorted(
             ((c, (cost, path)) for c, (cost, path) in candidate_paths.items() if cost != float('inf')),
             key=lambda x: x[1][0]
@@ -448,18 +439,10 @@ def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acc
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Advanced routing error: {e}", exc_info=True)
-        # Fallback to basic routing
+        # Fallback to basic routing using G_road
         try:
-            source_node = ox.distance.nearest_nodes(G, lng, lat)
-            dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
-            # 同样解析 AP 节点
-            dest_node = _resolve_to_road_node(G, dest_node, lat=dest_lat, lng=dest_lng)
-            source_node = _resolve_to_road_node(G, source_node, lat=lat, lng=lng)
-            
-            # 确保 source 和 dest 都是整数（路网节点），否则 shortest_path 会失败
-            if isinstance(source_node, str) or isinstance(dest_node, str):
-                logger.warning(f"Cannot use shortest_path with string nodes: source={source_node}, dest={dest_node}")
-                return {"path": [], "alternatives": [], "message": f"Routing failed: cannot resolve nodes to road network. {error_msg}"}
+            source_node = int(ox.distance.nearest_nodes(G_road, lng, lat))
+            dest_node = int(ox.distance.nearest_nodes(G_road, dest_lng, dest_lat))
             
             path_nodes = nx.shortest_path(G, source=source_node, target=dest_node, weight='length')
             path_coords = [{"lat": G.nodes[n]['y'], "lng": G.nodes[n]['x']} for n in path_nodes]
