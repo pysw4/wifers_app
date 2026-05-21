@@ -277,11 +277,12 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
     策略：
     1. 先用 ox.distance.nearest_nodes 在整个图上查找
     2. 如果返回的是整数（路网节点），直接返回
-    3. 如果返回的是字符串（AP节点），用欧几里得距离手动找最近的路网节点
+    3. 如果返回的是字符串（AP节点），用 ox.distance.nearest_nodes 在只包含路网节点的子图上查找
+    4. 如果还不行，用欧几里得距离手动找最近的路网节点
     """
     # 如果节点已经是整数（OSM 路网节点），直接返回
-    if isinstance(node_id, int):
-        return node_id
+    if isinstance(node_id, (int, np.integer)):
+        return int(node_id)
     
     # 如果是字符串节点（AP 或室内节点），找最近的 OSM 路网节点
     logger.info(f"Node '{node_id}' is a string node, finding nearest road node")
@@ -297,21 +298,25 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
     if node_lat is None or node_lng is None:
         return node_id
     
-    # 收集所有路网节点（整数节点）
-    road_nodes = [n for n in G.nodes() if isinstance(n, int)]
+    # 收集所有路网节点（整数类型，包括 numpy 整数）
+    road_nodes = [n for n in G.nodes() if isinstance(n, (int, np.integer))]
     if not road_nodes:
+        logger.warning(f"No road nodes found in graph!")
         return node_id
     
-    # 策略1: 用 ox.distance.nearest_nodes 在整个图上查找
+    # 策略1: 用 ox.distance.nearest_nodes 在只包含路网节点的子图上查找
+    # 注意：必须在子图上查找，否则 nearest_nodes 可能返回 AP 节点
     try:
-        nearest = ox.distance.nearest_nodes(G, node_lng, node_lat)
-        if isinstance(nearest, int):
+        road_subgraph = G.subgraph(road_nodes)
+        nearest = ox.distance.nearest_nodes(road_subgraph, node_lng, node_lat)
+        if isinstance(nearest, (int, np.integer)):
+            nearest = int(nearest)
             logger.info(f"Resolved '{node_id}' -> road node {nearest}")
             return nearest
         else:
-            logger.warning(f"ox.nearest_nodes returned string node '{nearest}', falling back to manual search")
+            logger.warning(f"ox.nearest_nodes on subgraph returned string node '{nearest}', falling back to manual search")
     except Exception as e:
-        logger.warning(f"ox.nearest_nodes failed: {e}, falling back to manual search")
+        logger.warning(f"ox.nearest_nodes on subgraph failed: {e}, falling back to manual search")
     
     # 策略2: 手动计算欧几里得距离找最近的路网节点
     try:
@@ -326,11 +331,13 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
                 best_dist = dist
                 best_node = rn
         if best_node is not None:
+            best_node = int(best_node)
             logger.info(f"Resolved '{node_id}' -> road node {best_node} (manual, dist={math.sqrt(best_dist):.6f})")
             return best_node
     except Exception as e:
         logger.warning(f"Manual road node search failed: {e}")
     
+    logger.warning(f"Failed to resolve '{node_id}' to any road node, returning original")
     return node_id
 
 
