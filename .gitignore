@@ -43,3 +43,20 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Python generated data files
+*.csv
+*.joblib
+cache/
+models/
+results/
+train_signal_model_v2.py
+train_signal_model.py
+find_paths.py
+helper_script.py
+predict.py
+predictor2_0.py
+main.py
+requirements.txt
+render.yaml
+description.txt
