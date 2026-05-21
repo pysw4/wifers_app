@@ -67,6 +67,7 @@ class StorageService {
         'lowPowerLocation': true,
         'preferStableAps': true,
         'recommendRadiusMeters': 500,
+        'recommendMode': 'balanced', // "distance", "signal", or "balanced"
       };
     }
     return jsonDecode(encoded) as Map<String, dynamic>;

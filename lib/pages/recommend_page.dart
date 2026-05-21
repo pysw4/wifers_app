@@ -26,6 +26,7 @@ class RecommendedAp {
   final String prediction;
   final double confidence;
   final double score;
+  final double signalDb;
 
   RecommendedAp({
     required this.id,
@@ -38,6 +39,7 @@ class RecommendedAp {
     required this.prediction,
     required this.confidence,
     required this.score,
+    this.signalDb = -70,
   });
 }
 
@@ -49,7 +51,18 @@ class _RecommendPageState extends State<RecommendPage> {
   String? _locationLabel;
   bool _preferStableAps = true;
   int _recommendRadiusMeters = 500;
+  String _recommendMode = 'balanced';
   List<RecommendedAp> _recommendations = [];
+
+  // Cache for signal strength predictions per AP
+  final Map<String, Map<String, dynamic>> _signalCache = {};
+
+  // Mode display info
+  static const Map<String, _ModeDisplay> _modeDisplay = {
+    'distance': _ModeDisplay('Distance Priority', Icons.near_me, Colors.green),
+    'signal': _ModeDisplay('Signal Priority', Icons.signal_wifi_4_bar, Colors.orange),
+    'balanced': _ModeDisplay('Balanced', Icons.balance, Colors.blue),
+  };
 
   @override
   void initState() {
@@ -63,7 +76,23 @@ class _RecommendPageState extends State<RecommendPage> {
     setState(() {
       _preferStableAps = settings['preferStableAps'] ?? true;
       _recommendRadiusMeters = settings['recommendRadiusMeters'] ?? 500;
+      _recommendMode = settings['recommendMode'] as String? ?? 'balanced';
     });
+  }
+
+  String get _modeLabel {
+    final display = _modeDisplay[_recommendMode];
+    return display?.label ?? 'Balanced';
+  }
+
+  IconData get _modeIconData {
+    final display = _modeDisplay[_recommendMode];
+    return display?.icon ?? Icons.balance;
+  }
+
+  Color get _modeColor {
+    final display = _modeDisplay[_recommendMode];
+    return display?.color ?? Colors.blue;
   }
 
   Future<void> _updateLocationLabel() async {
@@ -83,11 +112,6 @@ class _RecommendPageState extends State<RecommendPage> {
     return ApDataService.loadAllApsAsMaps();
   }
 
-  /// Build prediction features using sensible defaults.
-  /// Since real-time AP runtime metrics are not available,
-  /// we use consistent default values rather than simulated ones.
-  /// The model's prediction will still be meaningful based on
-  /// the hour and overloaded flag, which are the most dynamic inputs.
   Map<String, dynamic> _buildPredictionFeatures(Map<String, dynamic> ap, LatLng userLocation) {
     return {
       'client_count': 10,
@@ -101,6 +125,80 @@ class _RecommendPageState extends State<RecommendPage> {
     };
   }
 
+  /// Fetch signal strength prediction for a single AP from the heatmap endpoint.
+  /// Falls back to the batch prediction if heatmap data is unavailable.
+  Future<Map<String, dynamic>> _fetchSignalForAp(Map<String, dynamic> ap) async {
+    final apName = ap['name'] as String? ?? '';
+    final apId = ap['id'] as String? ?? '';
+    final key = apName.isNotEmpty ? apName : apId;
+    if (key.isEmpty) return {'signal_db': -70, 'signal_quality': 'Fair'};
+
+    // Check cache first
+    if (_signalCache.containsKey(key)) {
+      return _signalCache[key]!;
+    }
+
+    try {
+      final heatmap = await _apiService.getSignalHeatmap();
+      final apPoints = heatmap['ap_points'] as Map<String, dynamic>?;
+      final points = apPoints?['points'] as List<dynamic>? ?? [];
+      for (final point in points) {
+        final map = point as Map<String, dynamic>;
+        final name = map['ap_name'] as String? ?? '';
+        if (name == key || name == apName) {
+          final result = {
+            'signal_db': map['signal_db'] ?? -70,
+            'signal_quality': map['signal_quality'] ?? 'Fair',
+            'bars': map['bars'] ?? 1,
+          };
+          _signalCache[key] = result;
+          return result;
+        }
+      }
+    } catch (e) {
+      debugPrint('Signal fetch failed for $key: $e');
+    }
+
+    // Fallback: return default
+    return {'signal_db': -70, 'signal_quality': 'Fair'};
+  }
+
+  /// Score an AP based on the selected recommendation mode.
+  /// Returns a score in [0, 1] range where higher = better.
+  double _scoreAp({
+    required double distance,
+    required double upProbability,
+    required double signalDb,
+  }) {
+    final distanceScore = (1.0 - (distance / _recommendRadiusMeters)).clamp(0.0, 1.0);
+    final signalScore = _dbmToNormalizedScore(signalDb);
+    final statusScore = upProbability / 100.0;
+
+    switch (_recommendMode) {
+      case 'distance':
+        // Mostly distance (80%), slight weight on signal to break ties
+        return distanceScore * 0.8 + signalScore * 0.15 + statusScore * 0.05;
+
+      case 'signal':
+        // Mostly signal strength (70%), some distance consideration
+        return signalScore * 0.7 + statusScore * 0.2 + distanceScore * 0.1;
+
+      case 'balanced':
+      default:
+        // Even weighted mix
+        final stabilityWeight = _preferStableAps ? 0.4 : 0.25;
+        return statusScore * stabilityWeight +
+            distanceScore * (0.5 - stabilityWeight * 0.3) +
+            signalScore * (0.5 - stabilityWeight * 0.2);
+    }
+  }
+
+  /// Convert dBm to a normalized score [0, 1].
+  /// -97 dBm (weakest) → 0.0, -22 dBm (strongest) → 1.0
+  double _dbmToNormalizedScore(double dbm) {
+    return ((dbm.clamp(-97.0, -22.0) + 97.0) / 75.0).clamp(0.0, 1.0);
+  }
+
   Future<void> _getRecommendation() async {
     setState(() {
       _isLoading = true;
@@ -111,19 +209,18 @@ class _RecommendPageState extends State<RecommendPage> {
     try {
       final position = await LocationService.getCurrentPosition();
       final userLocation = LatLng(position.latitude, position.longitude);
-      
-      // Build a cache key based on location (rounded to 4 decimal places ~11m precision)
-      // and current settings
+
+      // Build a cache key based on location and current settings
       final cacheLat = position.latitude.toStringAsFixed(4);
       final cacheLng = position.longitude.toStringAsFixed(4);
-      final cacheKey = 'recommend_${cacheLat}_${cacheLng}_$_recommendRadiusMeters$_preferStableAps';
-      
+      final cacheKey = 'recommend_${cacheLat}_${cacheLng}_$_recommendRadiusMeters$_preferStableAps$_recommendMode';
+
       // Try to load from cache first
       final settings = await StorageService.loadSettings();
       final cacheDuration = Duration(
         minutes: settings['cacheDurationMinutes'] as int? ?? 60,
       );
-      
+
       final cachedResult = await CacheService.get<String>(cacheKey, ttl: cacheDuration);
       if (cachedResult != null) {
         final decoded = jsonDecode(cachedResult) as List<dynamic>;
@@ -140,12 +237,13 @@ class _RecommendPageState extends State<RecommendPage> {
             prediction: map['prediction'] as String,
             confidence: (map['confidence'] as num).toDouble(),
             score: (map['score'] as num).toDouble(),
+            signalDb: (map['signal_db'] as num?)?.toDouble() ?? -70,
           );
         }).toList();
-        
+
         setState(() {
           _recommendations = cachedAps;
-          _statusMessage = 'Top ${cachedAps.length} recommendations (cached).';
+          _statusMessage = 'Top ${cachedAps.length} recommendations ($_modeLabel).';
         });
         return;
       }
@@ -163,15 +261,25 @@ class _RecommendPageState extends State<RecommendPage> {
       if (nearbyAps.isEmpty) {
         setState(() {
           _statusMessage = 'No APs found within $_recommendRadiusMeters meters.';
+          _isLoading = false;
         });
         return;
       }
 
+      // Sort by distance first, take top 100 for prediction
       nearbyAps.sort((a, b) => (a['distance'] as double).compareTo(b['distance'] as double));
       final selectedAps = nearbyAps.take(100).toList();
+
+      // Batch predict AP status
       final featureBatch = selectedAps.map((ap) => _buildPredictionFeatures(ap, userLocation)).toList();
       final predictionResponse = await _apiService.predictAPStatusBatch(featureBatch);
       final predictions = predictionResponse['predictions'] as List<dynamic>;
+
+      // Fetch signal strengths for all selected APs
+      final signalResults = <Map<String, dynamic>>[];
+      for (final ap in selectedAps) {
+        signalResults.add(await _fetchSignalForAp(ap));
+      }
 
       final scoredAps = <RecommendedAp>[];
       for (var i = 0; i < selectedAps.length; i++) {
@@ -179,15 +287,19 @@ class _RecommendPageState extends State<RecommendPage> {
         final predictionInfo = predictions[i] as Map<String, dynamic>;
         final prediction = predictionInfo['prediction'] as String? ?? 'Unknown';
         final confidence = (predictionInfo['confidence'] as num?)?.toDouble() ?? 0.0;
-        // up_probability is the model's confidence that AP is "Up" (0-100%)
         final upProbability = (predictionInfo['up_probability'] as num?)?.toDouble() ?? 0.0;
         final distance = ap['distance'] as double;
-        
-        // Use up_probability (0-100) instead of binary Up/Down for smoother scoring
-        final statusScore = upProbability / 100.0;
-        final distanceScore = (1.0 - (distance / _recommendRadiusMeters)).clamp(0.0, 1.0);
-        final stabilityWeight = _preferStableAps ? 0.7 : 0.5;
-        final score = statusScore * stabilityWeight + distanceScore * (1.0 - stabilityWeight);
+
+        // Get signal data (either from heatmap or fallback)
+        final signalData = i < signalResults.length ? signalResults[i] : <String, dynamic>{};
+        final signalDb = (signalData['signal_db'] as num?)?.toDouble() ?? -70;
+
+        // Score based on selected mode
+        final score = _scoreAp(
+          distance: distance,
+          upProbability: upProbability,
+          signalDb: signalDb,
+        );
 
         scoredAps.add(RecommendedAp(
           id: ap['id'] as String,
@@ -200,6 +312,7 @@ class _RecommendPageState extends State<RecommendPage> {
           prediction: prediction,
           confidence: confidence,
           score: score,
+          signalDb: signalDb,
         ));
       }
 
@@ -218,12 +331,13 @@ class _RecommendPageState extends State<RecommendPage> {
         'prediction': ap.prediction,
         'confidence': ap.confidence,
         'score': ap.score,
+        'signal_db': ap.signalDb,
       }).toList();
       await CacheService.set(cacheKey, jsonEncode(cacheData));
 
       setState(() {
         _recommendations = topAps;
-        _statusMessage = 'Top ${topAps.length} recommendations ready.';
+        _statusMessage = 'Top ${topAps.length} recommendations ($_modeLabel).';
       });
     } catch (e) {
       setState(() {
@@ -313,6 +427,15 @@ class _RecommendPageState extends State<RecommendPage> {
     }
   }
 
+  /// Convert dBm to color for signal indicator
+  Color _dbmToColor(double dbm) {
+    final clamped = dbm.clamp(-97.0, -22.0);
+    final t = (clamped + 97.0) / 75.0;
+    if (t > 0.66) return Colors.green;
+    if (t > 0.33) return Colors.orange;
+    return Colors.red;
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -325,56 +448,136 @@ class _RecommendPageState extends State<RecommendPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Your location: ${_locationLabel ?? 'Locating...'}',
-              style: const TextStyle(fontSize: 16),
+            // Location info
+            Row(
+              children: [
+                Icon(Icons.my_location, size: 16, color: Colors.grey[600]),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    _locationLabel ?? 'Locating...',
+                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+
+            // Mode indicator
+            Row(
+              children: [
+                Icon(_modeIconData, size: 16, color: _modeColor),
+                const SizedBox(width: 6),
+                Text(
+                  'Mode: $_modeLabel',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: _modeColor,
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
+
+            // Status message
             Text(
               _statusMessage,
               style: const TextStyle(fontSize: 14, color: Colors.black54),
             ),
             const SizedBox(height: 16),
+
+            // Recommend button
             SizedBox(
               width: double.infinity,
-              child: ElevatedButton(
+              child: ElevatedButton.icon(
                 onPressed: _isLoading ? null : _getRecommendation,
+                icon: _isLoading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(_modeIconData),
+                label: Text(_isLoading ? 'Calculating...' : 'Find Best APs ($_modeLabel)'),
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 16),
+                  backgroundColor: _modeColor,
+                  foregroundColor: Colors.white,
                 ),
-                child: _isLoading
-                    ? const SizedBox(
-                        height: 24,
-                        width: 24,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2.5,
-                          color: Colors.white,
-                        ),
-                      )
-                    : const Text('Recommend Best APs'),
               ),
             ),
             const SizedBox(height: 16),
+
+            // Recommendations list
             Expanded(
               child: _recommendations.isEmpty
-                  ? const Center(
-                      child: Text('No recommendations yet. Tap the button above.'),
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(_modeIconData, size: 64, color: Colors.grey[300]),
+                          const SizedBox(height: 16),
+                          Text(
+                            'No recommendations yet.\nTap the button above.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.grey[500]),
+                          ),
+                        ],
+                      ),
                     )
                   : ListView.builder(
                       itemCount: _recommendations.length,
                       itemBuilder: (context, index) {
                         final ap = _recommendations[index];
+                        final signalColor = _dbmToColor(ap.signalDb);
                         return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 8),
+                          margin: const EdgeInsets.symmetric(vertical: 6),
                           child: ListTile(
-                            title: Text(ap.name),
-                            subtitle: Text('${ap.building} • ${ap.floor != null ? 'Floor ${ap.floor}' : 'Floor unknown'}'),
+                            leading: CircleAvatar(
+                              backgroundColor: _modeColor.withValues(alpha: 0.15),
+                              child: Text(
+                                '${index + 1}',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: _modeColor,
+                                ),
+                              ),
+                            ),
+                            title: Text(
+                              ap.name,
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${ap.building} • ${ap.floor != null ? 'Floor ${ap.floor}' : 'Floor unknown'}'),
+                                const SizedBox(height: 4),
+                                Row(
+                                  children: [
+                                    // Distance
+                                    Icon(Icons.near_me, size: 12, color: Colors.grey[600]),
+                                    const SizedBox(width: 2),
+                                    Text(
+                                      '${ap.distance.toStringAsFixed(0)} m',
+                                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    // Signal
+                                    Icon(Icons.signal_wifi_4_bar, size: 12, color: signalColor),
+                                    const SizedBox(width: 2),
+                                    Text(
+                                      '${ap.signalDb.toStringAsFixed(1)} dBm',
+                                      style: TextStyle(fontSize: 11, color: signalColor),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
                             trailing: Column(
                               mainAxisAlignment: MainAxisAlignment.center,
                               crossAxisAlignment: CrossAxisAlignment.end,
                               children: [
-                                Text('${ap.distance.toStringAsFixed(0)} m'),
-                                const SizedBox(height: 4),
                                 Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
@@ -393,6 +596,11 @@ class _RecommendPageState extends State<RecommendPage> {
                                     ),
                                   ],
                                 ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '${ap.confidence.toStringAsFixed(2)} conf',
+                                  style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+                                ),
                               ],
                             ),
                             onTap: () => _navigateToAp(ap),
@@ -406,4 +614,12 @@ class _RecommendPageState extends State<RecommendPage> {
       ),
     );
   }
+}
+
+class _ModeDisplay {
+  final String label;
+  final IconData icon;
+  final Color color;
+
+  const _ModeDisplay(this.label, this.icon, this.color);
 }

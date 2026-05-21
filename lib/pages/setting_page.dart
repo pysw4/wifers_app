@@ -15,6 +15,7 @@ class _SettingPageState extends State<SettingPage> {
   bool _preferStableAps = true;
   int _cacheDurationMinutes = 60;
   int _recommendRadiusMeters = 500;
+  String _recommendMode = 'balanced';
 
   final List<int> _cacheDurations = [15, 60, 240];
   final Map<int, String> _cacheDurationLabels = {
@@ -29,6 +30,12 @@ class _SettingPageState extends State<SettingPage> {
     800: '800 m',
     1000: '1 km',
     5000: '5 km',
+  };
+  final List<String> _recommendModes = ['distance', 'signal', 'balanced'];
+  final Map<String, _ModeInfo> _recommendModeInfo = {
+    'distance': _ModeInfo('Distance Priority', Icons.near_me, 'Prefer the closest APs'),
+    'signal': _ModeInfo('Signal Priority', Icons.signal_wifi_4_bar, 'Prefer APs with strongest predicted signal'),
+    'balanced': _ModeInfo('Balanced', Icons.balance, 'Weighted mix of distance and signal quality'),
   };
 
   @override
@@ -46,6 +53,7 @@ class _SettingPageState extends State<SettingPage> {
       _lowPowerLocation = settings['lowPowerLocation'] ?? true;
       _preferStableAps = settings['preferStableAps'] ?? true;
       _recommendRadiusMeters = settings['recommendRadiusMeters'] ?? 500;
+      _recommendMode = settings['recommendMode'] as String? ?? 'balanced';
     });
   }
 
@@ -57,10 +65,10 @@ class _SettingPageState extends State<SettingPage> {
       'lowPowerLocation': _lowPowerLocation,
       'preferStableAps': _preferStableAps,
       'recommendRadiusMeters': _recommendRadiusMeters,
+      'recommendMode': _recommendMode,
     };
     await StorageService.saveSettings(settings);
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -72,6 +80,7 @@ class _SettingPageState extends State<SettingPage> {
       body: ListView(
         padding: const EdgeInsets.all(16.0),
         children: [
+          // --- Prediction Settings ---
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16.0),
@@ -127,6 +136,7 @@ class _SettingPageState extends State<SettingPage> {
 
           const SizedBox(height: 16),
 
+          // --- Recommendation Preferences ---
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16.0),
@@ -134,10 +144,52 @@ class _SettingPageState extends State<SettingPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Text(
-                    'Recommendation Preferences',
+                    'Recommendation Mode',
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 8),
+                  ..._recommendModes.map((mode) {
+                    final info = _recommendModeInfo[mode]!;
+                    final isSelected = _recommendMode == mode;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Card(
+                        color: isSelected
+                            ? Theme.of(context).colorScheme.primaryContainer
+                            : null,
+                        child: ListTile(
+                          leading: Icon(
+                            info.icon,
+                            color: isSelected
+                                ? Theme.of(context).colorScheme.primary
+                                : null,
+                          ),
+                          title: Text(
+                            info.label,
+                            style: TextStyle(
+                              fontWeight:
+                                  isSelected ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                          subtitle: Text(info.description),
+                          trailing: isSelected
+                              ? Icon(
+                                  Icons.check_circle,
+                                  color: Theme.of(context).colorScheme.primary,
+                                )
+                              : null,
+                          selected: isSelected,
+                          onTap: () {
+                            setState(() {
+                              _recommendMode = mode;
+                            });
+                            _saveSettings();
+                          },
+                        ),
+                      ),
+                    );
+                  }),
+                  const Divider(height: 24),
                   SwitchListTile(
                     title: const Text('Prefer stable APs'),
                     subtitle: const Text('Rank APs with predicted Up status higher'),
@@ -180,6 +232,7 @@ class _SettingPageState extends State<SettingPage> {
 
           const SizedBox(height: 16),
 
+          // --- Battery & Notifications ---
           Card(
             child: Column(
               children: [
@@ -214,6 +267,7 @@ class _SettingPageState extends State<SettingPage> {
 
           const SizedBox(height: 16),
 
+          // --- Data Management ---
           Card(
             child: Column(
               children: [
@@ -260,4 +314,12 @@ class _SettingPageState extends State<SettingPage> {
       ),
     );
   }
+}
+
+class _ModeInfo {
+  final String label;
+  final IconData icon;
+  final String description;
+
+  const _ModeInfo(this.label, this.icon, this.description);
 }
