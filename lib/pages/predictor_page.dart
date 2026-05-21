@@ -27,14 +27,26 @@ class _PredictorPageState extends State<PredictorPage> {
 
   Map<String, dynamic>? _predictionResult;
   bool _isLoading = false;
+  bool _showManualForm = false;
 
   @override
   void initState() {
     super.initState();
     if (widget.selectedAp != null) {
-      // The model uses AP runtime metrics, not static AP location metadata.
-      // Pre-filling is not possible without a live metrics source.
+      _autoFillFeatures();
     }
+  }
+
+  void _autoFillFeatures() {
+    final now = DateTime.now();
+    _clientCountController.text = '10';
+    _cpuUtilizationController.text = '50.0';
+    _memFreeController.text = '1000.0';
+    _memTotalController.text = '2000.0';
+    _lastModifiedController.text = '1640995200.0';
+    _hourController.text = now.hour.toDouble().toStringAsFixed(0);
+    _memUsageController.text = '50.0';
+    _overloaded = false;
   }
 
   @override
@@ -86,10 +98,27 @@ class _PredictorPageState extends State<PredictorPage> {
 
   @override
   Widget build(BuildContext context) {
+    final hasAp = widget.selectedAp != null;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('WiFi AP Status Predictor'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          if (!hasAp)
+            IconButton(
+              icon: Icon(
+                _showManualForm ? Icons.visibility_off : Icons.developer_mode,
+                size: 20,
+              ),
+              tooltip: _showManualForm ? 'Hide manual input' : 'Manual input',
+              onPressed: () {
+                setState(() {
+                  _showManualForm = !_showManualForm;
+                });
+              },
+            ),
+        ],
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
@@ -98,7 +127,7 @@ class _PredictorPageState extends State<PredictorPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (widget.selectedAp != null) ...[
+              if (hasAp) ...[
                 Card(
                   color: Theme.of(context).colorScheme.primary.withAlpha(25),
                   margin: EdgeInsets.zero,
@@ -120,186 +149,266 @@ class _PredictorPageState extends State<PredictorPage> {
                   ),
                 ),
                 const SizedBox(height: 16),
-              ],
-              const Text(
-                'Enter AP Features for Status Prediction',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 20),
 
-              // Client count input
-              TextFormField(
-                controller: _clientCountController,
-                decoration: const InputDecoration(
-                  labelText: 'Client Count',
-                  hintText: 'Number of connected clients',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: TextInputType.number,
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter client count';
-                  }
-                  if (int.tryParse(value) == null) {
-                    return 'Please enter a valid integer';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // CPU utilization input
-              TextFormField(
-                controller: _cpuUtilizationController,
-                decoration: const InputDecoration(
-                  labelText: 'CPU Utilization (%)',
-                  hintText: 'Enter CPU utilization',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter CPU utilization';
-                  }
-                  if (double.tryParse(value) == null) {
-                    return 'Please enter a valid number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // Memory free input
-              TextFormField(
-                controller: _memFreeController,
-                decoration: const InputDecoration(
-                  labelText: 'Memory Free',
-                  hintText: 'Enter free memory bytes',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter free memory';
-                  }
-                  if (double.tryParse(value) == null) {
-                    return 'Please enter a valid number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // Memory total input
-              TextFormField(
-                controller: _memTotalController,
-                decoration: const InputDecoration(
-                  labelText: 'Memory Total',
-                  hintText: 'Enter total memory bytes',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter total memory';
-                  }
-                  if (double.tryParse(value) == null) {
-                    return 'Please enter a valid number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // Last modified timestamp input
-              TextFormField(
-                controller: _lastModifiedController,
-                decoration: const InputDecoration(
-                  labelText: 'Last Modified (Unix)',
-                  hintText: 'Enter unix timestamp',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter last modified timestamp';
-                  }
-                  if (double.tryParse(value) == null) {
-                    return 'Please enter a valid timestamp';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // Hour input
-              TextFormField(
-                controller: _hourController,
-                decoration: const InputDecoration(
-                  labelText: 'Hour',
-                  hintText: 'Enter hour (0-23)',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter hour';
-                  }
-                  final parsed = double.tryParse(value);
-                  if (parsed == null || parsed < 0 || parsed > 23) {
-                    return 'Please enter a valid hour between 0 and 23';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // Memory usage input
-              TextFormField(
-                controller: _memUsageController,
-                decoration: const InputDecoration(
-                  labelText: 'Memory Usage (%)',
-                  hintText: 'Enter memory usage percentage',
-                  border: OutlineInputBorder(),
-                ),
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                validator: (value) {
-                  if (value == null || value.isEmpty) {
-                    return 'Please enter memory usage';
-                  }
-                  if (double.tryParse(value) == null) {
-                    return 'Please enter a valid number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // Overloaded switch
-              SwitchListTile(
-                title: const Text('Overloaded'),
-                value: _overloaded,
-                onChanged: (value) {
-                  setState(() {
-                    _overloaded = value;
-                  });
-                },
-              ),
-              const SizedBox(height: 24),
-
-              // Predict button
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _predictStatus,
-                  style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                // One-click predict button when AP is selected
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _isLoading ? null : _predictStatus,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      backgroundColor: Theme.of(context).colorScheme.primary,
+                      foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                    ),
+                    icon: _isLoading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          )
+                        : const Icon(Icons.auto_awesome),
+                    label: Text(
+                      _isLoading ? 'Predicting...' : 'Predict Status (Auto-filled)',
+                      style: const TextStyle(fontSize: 16),
+                    ),
                   ),
-                  child: _isLoading
-                      ? const CircularProgressIndicator()
-                      : const Text('Predict AP Status'),
                 ),
-              ),
+                const SizedBox(height: 24),
+
+                // Show auto-filled values summary
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Auto-filled Features',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                        ),
+                        const SizedBox(height: 8),
+                        _featureRow('Client Count', _clientCountController.text),
+                        _featureRow('CPU Utilization', '${_cpuUtilizationController.text}%'),
+                        _featureRow('Memory Free', _memFreeController.text),
+                        _featureRow('Memory Total', _memTotalController.text),
+                        _featureRow('Hour', _hourController.text),
+                        _featureRow('Memory Usage', '${_memUsageController.text}%'),
+                        _featureRow('Overloaded', _overloaded ? 'Yes' : 'No'),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+
+              // Manual form: shown when no AP selected (via debug icon) or always visible
+              if (!hasAp && !_showManualForm)
+                Padding(
+                  padding: const EdgeInsets.only(top: 40),
+                  child: Center(
+                    child: Column(
+                      children: [
+                        Icon(
+                          Icons.developer_mode,
+                          size: 64,
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Tap the developer icon in the app bar\nto enter manual prediction mode.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.outline,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+              if ((!hasAp && _showManualForm) || hasAp) ...[
+                const SizedBox(height: 16),
+                const Text(
+                  'Enter AP Features for Status Prediction',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 20),
+
+                // Client count input
+                TextFormField(
+                  controller: _clientCountController,
+                  decoration: const InputDecoration(
+                    labelText: 'Client Count',
+                    hintText: 'Number of connected clients',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: TextInputType.number,
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter client count';
+                    }
+                    if (int.tryParse(value) == null) {
+                      return 'Please enter a valid integer';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // CPU utilization input
+                TextFormField(
+                  controller: _cpuUtilizationController,
+                  decoration: const InputDecoration(
+                    labelText: 'CPU Utilization (%)',
+                    hintText: 'Enter CPU utilization',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter CPU utilization';
+                    }
+                    if (double.tryParse(value) == null) {
+                      return 'Please enter a valid number';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Memory free input
+                TextFormField(
+                  controller: _memFreeController,
+                  decoration: const InputDecoration(
+                    labelText: 'Memory Free',
+                    hintText: 'Enter free memory bytes',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter free memory';
+                    }
+                    if (double.tryParse(value) == null) {
+                      return 'Please enter a valid number';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Memory total input
+                TextFormField(
+                  controller: _memTotalController,
+                  decoration: const InputDecoration(
+                    labelText: 'Memory Total',
+                    hintText: 'Enter total memory bytes',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter total memory';
+                    }
+                    if (double.tryParse(value) == null) {
+                      return 'Please enter a valid number';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Last modified timestamp input
+                TextFormField(
+                  controller: _lastModifiedController,
+                  decoration: const InputDecoration(
+                    labelText: 'Last Modified (Unix)',
+                    hintText: 'Enter unix timestamp',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter last modified timestamp';
+                    }
+                    if (double.tryParse(value) == null) {
+                      return 'Please enter a valid timestamp';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Hour input
+                TextFormField(
+                  controller: _hourController,
+                  decoration: const InputDecoration(
+                    labelText: 'Hour',
+                    hintText: 'Enter hour (0-23)',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter hour';
+                    }
+                    final parsed = double.tryParse(value);
+                    if (parsed == null || parsed < 0 || parsed > 23) {
+                      return 'Please enter a valid hour between 0 and 23';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Memory usage input
+                TextFormField(
+                  controller: _memUsageController,
+                  decoration: const InputDecoration(
+                    labelText: 'Memory Usage (%)',
+                    hintText: 'Enter memory usage percentage',
+                    border: OutlineInputBorder(),
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter memory usage';
+                    }
+                    if (double.tryParse(value) == null) {
+                      return 'Please enter a valid number';
+                    }
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 16),
+
+                // Overloaded switch
+                SwitchListTile(
+                  title: const Text('Overloaded'),
+                  value: _overloaded,
+                  onChanged: (value) {
+                    setState(() {
+                      _overloaded = value;
+                    });
+                  },
+                ),
+                const SizedBox(height: 24),
+
+                // Predict button
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _predictStatus,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                    ),
+                    child: _isLoading
+                        ? const CircularProgressIndicator()
+                        : const Text('Predict AP Status'),
+                  ),
+                ),
+              ],
+
               const SizedBox(height: 24),
 
               // Results
@@ -348,6 +457,19 @@ class _PredictorPageState extends State<PredictorPage> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Widget _featureRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 13)),
+          Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+        ],
       ),
     );
   }

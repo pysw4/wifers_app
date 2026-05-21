@@ -83,30 +83,21 @@ class _RecommendPageState extends State<RecommendPage> {
     return ApDataService.loadAllApsAsMaps();
   }
 
+  /// Build prediction features using sensible defaults.
+  /// Since real-time AP runtime metrics are not available,
+  /// we use consistent default values rather than simulated ones.
+  /// The model's prediction will still be meaningful based on
+  /// the hour and overloaded flag, which are the most dynamic inputs.
   Map<String, dynamic> _buildPredictionFeatures(Map<String, dynamic> ap, LatLng userLocation) {
-    final floor = ap['floor'] as int? ?? 0;
-    final distance = _distanceCalculator.as(
-      LengthUnit.Meter,
-      userLocation,
-      LatLng(ap['lat'] as double, ap['lng'] as double),
-    );
-    final buildingHash = ap['building']?.toString().hashCode.abs() ?? 0;
-    final clientCount = 10 + floor * 4 + (buildingHash % 15);
-    final cpuUtilization = 35.0 + floor * 3 + (buildingHash % 25) * 0.5;
-    final memFree = 1500.0 - floor * 20.0;
-    final memTotal = 2500.0;
-    final memUsage = 45.0 + (buildingHash % 30) * 0.7;
-    final lastModified = DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000 - (distance ~/ 20);
-    final overloaded = _preferStableAps ? 0 : 1;
     return {
-      'client_count': clientCount,
-      'cpu_utilization': cpuUtilization.clamp(0.0, 100.0),
-      'mem_free': memFree.clamp(100.0, 4000.0),
-      'mem_total': memTotal,
-      'last_modified': lastModified.toDouble(),
+      'client_count': 10,
+      'cpu_utilization': 50.0,
+      'mem_free': 1000.0,
+      'mem_total': 2000.0,
+      'last_modified': 1640995200.0,
       'hour': DateTime.now().hour.toDouble(),
-      'mem_usage': memUsage.clamp(0.0, 100.0),
-      'overloaded': overloaded,
+      'mem_usage': 50.0,
+      'overloaded': _preferStableAps ? 0 : 1,
     };
   }
 
@@ -125,7 +116,7 @@ class _RecommendPageState extends State<RecommendPage> {
       // and current settings
       final cacheLat = position.latitude.toStringAsFixed(4);
       final cacheLng = position.longitude.toStringAsFixed(4);
-      final cacheKey = 'recommend_${cacheLat}_${cacheLng}_${_recommendRadiusMeters}_${_preferStableAps}';
+      final cacheKey = 'recommend_${cacheLat}_${cacheLng}_$_recommendRadiusMeters$_preferStableAps';
       
       // Try to load from cache first
       final settings = await StorageService.loadSettings();

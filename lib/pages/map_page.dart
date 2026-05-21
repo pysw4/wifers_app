@@ -12,6 +12,7 @@ import 'package:wifers_app/services/cache_service.dart';
 import 'package:wifers_app/models/ap_info.dart';
 import 'package:wifers_app/pages/route_page.dart';
 import 'package:wifers_app/pages/favorites_page.dart';
+import 'package:wifers_app/pages/predictor_page.dart';
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -572,7 +573,12 @@ class _MapPageState extends State<MapPage> {
 
   void _predictAP(APInfo ap) {
     Navigator.pop(context);
-    _showPredictionDialog(ap);
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PredictorPage(selectedAp: ap),
+      ),
+    );
   }
 
   Future<void> _favoriteAP(APInfo ap) async {
@@ -591,136 +597,6 @@ class _MapPageState extends State<MapPage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('${ap.name ?? 'AP'} added to favorites')),
-    );
-  }
-
-  void _showPredictionDialog([APInfo? ap]) {
-    final formKey = GlobalKey<FormState>();
-    final clientCountController = TextEditingController(text: '10');
-    final cpuUtilizationController = TextEditingController(text: '50.0');
-    final memFreeController = TextEditingController(text: '1000.0');
-    final memTotalController = TextEditingController(text: '2000.0');
-    final lastModifiedController = TextEditingController(text: '1640995200.0');
-    final hourController = TextEditingController(text: '12.0');
-    final memUsageController = TextEditingController(text: '50.0');
-    bool overloaded = false;
-
-
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Predict AP Status${ap != null ? ' for ${ap.name}' : ''}'),
-        content: SingleChildScrollView(
-          child: Form(
-            key: formKey,
-
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: clientCountController,
-                  decoration: const InputDecoration(labelText: 'Client Count'),
-                  keyboardType: TextInputType.number,
-                  validator: (value) => value!.isEmpty ? 'Required' : null,
-                ),
-                TextFormField(
-                  controller: cpuUtilizationController,
-                  decoration: const InputDecoration(labelText: 'CPU Utilization (%)'),
-                  keyboardType: TextInputType.number,
-                  validator: (value) => value!.isEmpty ? 'Required' : null,
-                ),
-                TextFormField(
-                  controller: memFreeController,
-                  decoration: const InputDecoration(labelText: 'Memory Free'),
-                  keyboardType: TextInputType.number,
-                  validator: (value) => value!.isEmpty ? 'Required' : null,
-                ),
-                TextFormField(
-                  controller: memTotalController,
-                  decoration: const InputDecoration(labelText: 'Memory Total'),
-                  keyboardType: TextInputType.number,
-                  validator: (value) => value!.isEmpty ? 'Required' : null,
-                ),
-                TextFormField(
-                  controller: lastModifiedController,
-                  decoration: const InputDecoration(labelText: 'Last Modified (Unix)'),
-                  keyboardType: TextInputType.number,
-                  validator: (value) => value!.isEmpty ? 'Required' : null,
-                ),
-                TextFormField(
-                  controller: hourController,
-                  decoration: const InputDecoration(labelText: 'Hour'),
-                  keyboardType: TextInputType.number,
-                  validator: (value) => value!.isEmpty ? 'Required' : null,
-                ),
-                TextFormField(
-                  controller: memUsageController,
-                  decoration: const InputDecoration(labelText: 'Memory Usage (%)'),
-                  keyboardType: TextInputType.number,
-                  validator: (value) => value!.isEmpty ? 'Required' : null,
-                ),
-                SwitchListTile(
-                  title: const Text('Overloaded'),
-                  value: overloaded,
-                  onChanged: (value) => setState(() => overloaded = value),
-
-                ),
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              if (formKey.currentState!.validate()) {
-                // Capture ScaffoldMessenger before dismissing dialog and awaiting
-                final messenger = ScaffoldMessenger.of(context);
-                Navigator.pop(context);
-                try {
-                  final features = {
-                    'client_count': int.parse(clientCountController.text),
-                    'cpu_utilization': double.parse(cpuUtilizationController.text),
-                    'mem_free': double.parse(memFreeController.text),
-                    'mem_total': double.parse(memTotalController.text),
-                    'last_modified': double.parse(lastModifiedController.text),
-                    'hour': double.parse(hourController.text),
-                    'mem_usage': double.parse(memUsageController.text),
-                    'overloaded': overloaded ? 1 : 0,
-
-                  };
-                  final result = await _apiService.predictAPStatus(features);
-                  final status = result['prediction'];
-
-                  setState(() {
-                    _aps.add(APInfo(
-                      id: 'predicted_${DateTime.now().millisecondsSinceEpoch}',
-                      name: ap?.name ?? 'Predicted AP',
-                      building: ap?.building ?? 'Predicted',
-                      lat: ap?.lat ?? _center.latitude,
-                      lng: ap?.lng ?? _center.longitude,
-                      height: ap?.height,
-                      espacio: ap?.espacio,
-                    ));
-                  });
-
-                  messenger.showSnackBar(
-                    SnackBar(content: Text('Predicted status: $status')),
-                  );
-                } catch (e) {
-                  messenger.showSnackBar(
-                    SnackBar(content: Text('Error: $e')),
-                  );
-                }
-              }
-            },
-            child: const Text('Predict'),
-          ),
-        ],
-      ),
     );
   }
 
@@ -993,7 +869,12 @@ class _MapPageState extends State<MapPage> {
           const SizedBox(height: 16),
           FloatingActionButton.extended(
             heroTag: 'predict',
-            onPressed: () => _showPredictionDialog(),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const PredictorPage()),
+              );
+            },
             icon: const Icon(Icons.analytics),
             label: const Text('Predict Hotspot'),
           ),

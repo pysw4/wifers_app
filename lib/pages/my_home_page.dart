@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:wifers_app/pages/map_page.dart';
 import 'package:wifers_app/pages/recommend_page.dart';
-import 'package:wifers_app/pages/predictor_page.dart';
 import 'package:wifers_app/pages/setting_page.dart';
 
 class MyHomePage extends StatefulWidget {
@@ -19,7 +18,6 @@ class _MyHomePageState extends State<MyHomePage> {
   final pages = [
     const MapPage(),
     RecommendPage(),
-    const PredictorPage(),
     const SettingPage(),
   ];
 
@@ -54,10 +52,6 @@ class _MyHomePageState extends State<MyHomePage> {
           BottomNavigationBarItem(
             icon: Icon(Icons.recommend),
             label: "Recommend",
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.analytics),
-            label: "Predictor",
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.settings),
