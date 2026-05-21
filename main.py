@@ -429,6 +429,60 @@ def list_available_buildings():
     }
 
 
+@app.get("/predict/signal_strength/ap_trend/{ap_name}")
+def get_ap_daily_trend(ap_name: str):
+    """
+    获取指定AP在24小时内的信号强度变化趋势。
+    
+    遍历所有24小时的预计算数据，提取指定AP的信号强度。
+    返回24个数据点（每小时一个），包含 signal_db 和 signal_quality。
+    """
+    trend_data = []
+    
+    for hour in range(24):
+        try:
+            data = _load_precomputed_heatmap(hour)
+            ap_points = data.get("ap_points", {})
+            points = ap_points.get("points", [])
+            
+            # 查找匹配的AP
+            found = None
+            for point in points:
+                if point.get("ap_name") == ap_name:
+                    found = point
+                    break
+            
+            if found:
+                trend_data.append({
+                    "hour": hour,
+                    "signal_db": found["signal_db"],
+                    "signal_quality": found["signal_quality"],
+                    "bars": found["bars"],
+                })
+            else:
+                trend_data.append({
+                    "hour": hour,
+                    "signal_db": None,
+                    "signal_quality": None,
+                    "bars": None,
+                })
+        except Exception as e:
+            trend_data.append({
+                "hour": hour,
+                "signal_db": None,
+                "signal_quality": None,
+                "bars": None,
+                "error": str(e),
+            })
+    
+    return {
+        "ap_name": ap_name,
+        "day_type": _get_day_type(),
+        "trend": trend_data,
+        "total_hours": len(trend_data),
+    }
+
+
 @app.get("/cache/status")
 def cache_status():
     """查看缓存状态"""
