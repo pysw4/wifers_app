@@ -1,0 +1,21 @@
+{
+  "model_type": "RandomForestClassifier",
+  "feature_names": [
+    "client_count",
+    "cpu_utilization",
+    "mem_free",
+    "mem_total",
+    "last_modified",
+    "hour",
+    "mem_usage",
+    "overloaded"
+  ],
+  "n_train_samples": 2130556,
+  "n_test_samples": 532639,
+  "down_pct": 5.63,
+  "f1_down": 0.9992,
+  "accuracy": 0.9999,
+  "training_date": "2026-05-21 23:54:56",
+  "class_balanced": true,
+  "selection_metric": "f1_down"
+}
