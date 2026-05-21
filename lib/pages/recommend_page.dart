@@ -319,10 +319,11 @@ class RecommendPageState extends State<RecommendPage> {
         usingGate = true;
       }
 
-      // Build a cache key based on location and current settings
+      // Build a cache key based on location, building filter, and current settings
       final cacheLat = userLocation.latitude.toStringAsFixed(4);
       final cacheLng = userLocation.longitude.toStringAsFixed(4);
-      final cacheKey = 'recommend_${cacheLat}_${cacheLng}_$_recommendRadiusMeters$_preferStableAps$_recommendMode${usingGate ? '_gate' : ''}';
+      final buildingKey = _selectedBuilding.isNotEmpty ? _selectedBuilding.replaceAll(' ', '_') : 'all';
+      final cacheKey = 'recommend_${cacheLat}_${cacheLng}_${buildingKey}_$_recommendRadiusMeters$_preferStableAps$_recommendMode${usingGate ? '_gate' : ''}';
 
       // Try to load from cache first
       final settings = await StorageService.loadSettings();

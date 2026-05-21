@@ -272,7 +272,12 @@ def route(lat: float, lng: float, dest_lat: float, dest_lng: float):
 def _resolve_to_road_node(G, node_id, lat=None, lng=None):
     """
     如果 node_id 是 AP 节点（字符串类型），找到它最近的 OSM 路网节点。
-    OSM 路网节点是整数类型，且没有 'node_type' 属性（或 node_type 不是 'ap'/'indoor'）。
+    OSM 路网节点是整数类型。
+    
+    策略：
+    1. 先用 ox.distance.nearest_nodes 在整个图上查找
+    2. 如果返回的是整数（路网节点），直接返回
+    3. 如果返回的是字符串（AP节点），用欧几里得距离手动找最近的路网节点
     """
     # 如果节点已经是整数（OSM 路网节点），直接返回
     if isinstance(node_id, int):
@@ -290,23 +295,43 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
         node_lng = lng
     
     if node_lat is None or node_lng is None:
-        # 没有坐标信息，返回原始节点
         return node_id
     
-    # 只从 OSM 路网节点中找最近（整数节点，且没有 node_type 属性）
+    # 收集所有路网节点（整数节点）
     road_nodes = [n for n in G.nodes() if isinstance(n, int)]
     if not road_nodes:
         return node_id
     
-    # 用 osmnx 的 nearest_nodes 只搜索路网节点
+    # 策略1: 用 ox.distance.nearest_nodes 在整个图上查找
     try:
-        road_subgraph = G.subgraph(road_nodes)
-        nearest = ox.distance.nearest_nodes(road_subgraph, node_lng, node_lat)
-        logger.info(f"Resolved '{node_id}' -> road node {nearest}")
-        return nearest
+        nearest = ox.distance.nearest_nodes(G, node_lng, node_lat)
+        if isinstance(nearest, int):
+            logger.info(f"Resolved '{node_id}' -> road node {nearest}")
+            return nearest
+        else:
+            logger.warning(f"ox.nearest_nodes returned string node '{nearest}', falling back to manual search")
     except Exception as e:
-        logger.warning(f"Failed to resolve node '{node_id}' to road node: {e}")
-        return node_id
+        logger.warning(f"ox.nearest_nodes failed: {e}, falling back to manual search")
+    
+    # 策略2: 手动计算欧几里得距离找最近的路网节点
+    try:
+        import math
+        best_node = None
+        best_dist = float('inf')
+        for rn in road_nodes:
+            rn_lat = G.nodes[rn].get('y', 0)
+            rn_lng = G.nodes[rn].get('x', 0)
+            dist = (rn_lat - node_lat)**2 + (rn_lng - node_lng)**2
+            if dist < best_dist:
+                best_dist = dist
+                best_node = rn
+        if best_node is not None:
+            logger.info(f"Resolved '{node_id}' -> road node {best_node} (manual, dist={math.sqrt(best_dist):.6f})")
+            return best_node
+    except Exception as e:
+        logger.warning(f"Manual road node search failed: {e}")
+    
+    return node_id
 
 
 @app.get("/route/advanced/{lat}/{lng}/{dest_lat}/{dest_lng}")
