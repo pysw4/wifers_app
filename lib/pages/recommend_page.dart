@@ -207,13 +207,85 @@ class _RecommendPageState extends State<RecommendPage> {
     });
 
     try {
-      final position = await LocationService.getCurrentPosition();
-      final userLocation = LatLng(position.latitude, position.longitude);
+      LatLng userLocation;
+      bool usingGate = false;
+
+      try {
+        final position = await LocationService.getCurrentPosition();
+        userLocation = LatLng(position.latitude, position.longitude);
+
+        // If outside campus, offer to use campus gate as reference
+        if (!LocationService.isNearCampus(userLocation)) {
+          if (!mounted) return;
+          final useGate = await showDialog<bool>(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Outside Campus Area'),
+              content: const Text(
+                'You are currently outside the UAB campus area. '
+                'Recommendations will be based on the campus main entrance.\n\n'
+                'Would you like to continue?',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Use Campus Gate'),
+                ),
+              ],
+            ),
+          );
+          if (useGate != true) {
+            setState(() {
+              _statusMessage = 'Recommendation cancelled.';
+              _isLoading = false;
+            });
+            return;
+          }
+          userLocation = LocationService.campusGate;
+          usingGate = true;
+        }
+      } catch (e) {
+        // Location unavailable, fallback to campus gate
+        if (!mounted) return;
+        final useGate = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Location Unavailable'),
+            content: const Text(
+              'Could not determine your current location.\n\n'
+              'Would you like to use the campus main entrance as the starting point for recommendations?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Use Campus Gate'),
+              ),
+            ],
+          ),
+        );
+        if (useGate != true) {
+          setState(() {
+            _statusMessage = 'Recommendation cancelled.';
+            _isLoading = false;
+          });
+          return;
+        }
+        userLocation = LocationService.campusGate;
+        usingGate = true;
+      }
 
       // Build a cache key based on location and current settings
-      final cacheLat = position.latitude.toStringAsFixed(4);
-      final cacheLng = position.longitude.toStringAsFixed(4);
-      final cacheKey = 'recommend_${cacheLat}_${cacheLng}_$_recommendRadiusMeters$_preferStableAps$_recommendMode';
+      final cacheLat = userLocation.latitude.toStringAsFixed(4);
+      final cacheLng = userLocation.longitude.toStringAsFixed(4);
+      final cacheKey = 'recommend_${cacheLat}_${cacheLng}_$_recommendRadiusMeters$_preferStableAps$_recommendMode${usingGate ? '_gate' : ''}';
 
       // Try to load from cache first
       final settings = await StorageService.loadSettings();
