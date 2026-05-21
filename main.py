@@ -277,6 +277,7 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
     使用欧几里得距离手动找最近的路网节点，避免 ox.distance.nearest_nodes 的兼容性问题。
     """
     # 如果节点已经是整数（OSM 路网节点），直接返回
+    # 兼容 numpy 整数类型（numpy.int64, numpy.int32 等）
     if isinstance(node_id, (int, np.integer)):
         return int(node_id)
     
@@ -295,10 +296,26 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
         logger.warning(f"Node '{node_id}' has no coordinates, cannot resolve")
         return node_id
     
-    # 收集所有路网节点（整数类型，包括 numpy 整数）
-    road_nodes = [n for n in G.nodes() if isinstance(n, (int, np.integer))]
+    # 收集所有路网节点
+    # 注意：OSM 节点 ID 可能是 numpy.int64 类型，也可能是 Python int 类型
+    # 使用更宽松的检查：排除字符串类型的就是路网节点
+    road_nodes = []
+    for n in G.nodes():
+        if isinstance(n, str):
+            continue  # 跳过 AP 节点和室内节点
+        try:
+            int(n)  # 如果能转为 int，就是路网节点
+            road_nodes.append(n)
+        except (ValueError, TypeError):
+            continue
+    
     if not road_nodes:
         logger.warning(f"No road nodes found in graph! Total nodes: {len(G.nodes())}")
+        # 调试：打印前10个节点的类型
+        for i, n in enumerate(G.nodes()):
+            if i >= 10:
+                break
+            logger.warning(f"  Node sample: {n} (type={type(n).__name__})")
         return node_id
     
     logger.info(f"Searching among {len(road_nodes)} road nodes for nearest to ({node_lat}, {node_lng})")
