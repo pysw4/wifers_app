@@ -12,7 +12,6 @@ import 'package:wifers_app/services/cache_service.dart';
 import 'package:wifers_app/models/ap_info.dart';
 import 'package:wifers_app/pages/route_page.dart';
 import 'package:wifers_app/pages/favorites_page.dart';
-import 'package:wifers_app/pages/predictor_page.dart';
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -25,7 +24,20 @@ class _MapPageState extends State<MapPage> {
   final ApiService _apiService = ApiService();
   final MapController _mapController = MapController();
 
-  static final LatLng _center = LatLng(41.504, 2.105); // UAB Barcelona center
+  // UAB campus core bounds
+  static const double _campusMinLat = 41.492;
+  static const double _campusMaxLat = 41.514;
+  static const double _campusMinLng = 2.092;
+  static const double _campusMaxLng = 2.118;
+  static final LatLng _center = LatLng(41.503, 2.105); // UAB campus center
+  static final LatLngBounds _campusBounds = LatLngBounds(
+    LatLng(_campusMinLat, _campusMinLng),
+    LatLng(_campusMaxLat, _campusMaxLng),
+  );
+  static const double _campusRadiusKm = 1.2; // ~1.2km from center
+  static const double _defaultZoom = 15.5;
+  static const double _minZoom = 14.5;
+  static const double _maxZoom = 19.0;
   LatLng? _currentLocation;
   StreamSubscription<Position>? _positionSubscription;
 
@@ -218,12 +230,28 @@ class _MapPageState extends State<MapPage> {
     super.dispose();
   }
 
+  /// 判断用户是否在校园附近
+  bool _isNearCampus(LatLng location) {
+    final distance = const Distance().as(
+      LengthUnit.Kilometer,
+      location,
+      _center,
+    );
+    return distance <= _campusRadiusKm;
+  }
+
   Future<void> _startLocationTracking() async {
     try {
       final position = await LocationService.getCurrentPosition();
+      final userLocation = LatLng(position.latitude, position.longitude);
       setState(() {
-        _currentLocation = LatLng(position.latitude, position.longitude);
+        _currentLocation = userLocation;
       });
+
+      // 如果用户不在校园附近，地图默认显示校园中心
+      if (!_isNearCampus(userLocation)) {
+        _mapController.move(_center, _defaultZoom);
+      }
 
       _positionSubscription = Geolocator.getPositionStream(
         locationSettings: const LocationSettings(
@@ -236,7 +264,8 @@ class _MapPageState extends State<MapPage> {
         });
       });
     } catch (e) {
-      // Handle location error
+      // Handle location error - 默认显示校园中心
+      _mapController.move(_center, _defaultZoom);
     }
   }
 
@@ -321,7 +350,7 @@ class _MapPageState extends State<MapPage> {
           height: 400,
           child: Column(
             children: [
-              Text('Current: $_selectedHour:00'),
+              Text('Current: $_selectedHour h'),
 
               const SizedBox(height: 16),
               Expanded(
@@ -440,11 +469,6 @@ class _MapPageState extends State<MapPage> {
                   label: const Text('Navigate'),
                 ),
                 ElevatedButton.icon(
-                  onPressed: () => _predictAP(ap),
-                  icon: const Icon(Icons.analytics),
-                  label: const Text('Predict'),
-                ),
-                ElevatedButton.icon(
                   onPressed: () => _favoriteAP(ap),
                   icon: const Icon(Icons.favorite),
                   label: const Text('Favorite'),
@@ -491,6 +515,36 @@ class _MapPageState extends State<MapPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Current location not available')),
       );
+      return;
+    }
+
+    // Check if user is near campus
+    if (!LocationService.isNearCampus(_currentLocation!)) {
+      if (!mounted) return;
+      final startFromGate = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Outside Campus Area'),
+          content: const Text(
+            'You are currently outside the UAB campus area. '
+            'Navigation is only available from within the campus.\n\n'
+            'Would you like to start navigation from the campus main entrance instead?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Start from Gate'),
+            ),
+          ],
+        ),
+      );
+      if (startFromGate != true) return;
+      // Navigate from campus gate
+      _navigateFromGate(ap);
       return;
     }
 
@@ -551,14 +605,63 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  void _predictAP(APInfo ap) {
-    Navigator.pop(context);
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => PredictorPage(selectedAp: ap),
-      ),
-    );
+  /// Navigate from the campus main entrance to the target AP.
+  Future<void> _navigateFromGate(APInfo ap) async {
+    try {
+      final routeResult = await _apiService.fetchAdvancedRoute(
+        LocationService.campusGateLng,
+        LocationService.campusGateLat,
+        ap.lng,
+        ap.lat,
+        acceptableRange: 500,
+      );
+
+      final pathData = routeResult['path'] as List<dynamic>;
+      final path = pathData.map<LatLng>((item) {
+        return LatLng(
+          (item['lat'] as num).toDouble(),
+          (item['lng'] as num).toDouble(),
+        );
+      }).toList();
+
+      if (path.isNotEmpty && mounted) {
+        final alternativesData = routeResult['alternatives'] as List<dynamic>? ?? [];
+        final alternatives = <RouteAlternative>[];
+        
+        for (var altData in alternativesData) {
+          final altPathData = altData['path'] as List<dynamic>;
+          final altPath = altPathData.map<LatLng>((item) {
+            return LatLng(
+              (item['lat'] as num).toDouble(),
+              (item['lng'] as num).toDouble(),
+            );
+          }).toList();
+
+          alternatives.add(RouteAlternative(
+            path: altPath,
+            distance: (altData['distance'] as num).toDouble(),
+          ));
+        }
+
+        if (!mounted) return;
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => RoutePage(
+              path: path,
+              title: 'Navigate to ${ap.name ?? 'AP'} (from Gate)',
+              alternatives: alternatives,
+              totalDistance: (routeResult['distance'] as num?)?.toDouble(),
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error fetching route from gate: $e')),
+      );
+    }
   }
 
   Future<void> _favoriteAP(APInfo ap) async {
@@ -691,15 +794,12 @@ class _MapPageState extends State<MapPage> {
             mapController: _mapController,
             options: MapOptions(
               initialCenter: displayCenter,
-              initialZoom: 15.0,
-              minZoom: 13.0,
-              maxZoom: 19.0,
+              initialZoom: _defaultZoom,
+              minZoom: _minZoom,
+              maxZoom: _maxZoom,
               keepAlive: true,
               cameraConstraint: CameraConstraint.contain(
-                bounds: LatLngBounds(
-                  const LatLng(41.47, 2.07),  // 西南角
-                  const LatLng(41.54, 2.14),  // 东北角
-                ),
+                bounds: _campusBounds,
               ),
               onMapEvent: (event) {
                 // Track zoom level (MapController has no zoom getter)
@@ -759,18 +859,6 @@ class _MapPageState extends State<MapPage> {
             },
             icon: const Icon(Icons.favorite),
             label: const Text('Favorites'),
-          ),
-          const SizedBox(height: 16),
-          FloatingActionButton.extended(
-            heroTag: 'predict',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const PredictorPage()),
-              );
-            },
-            icon: const Icon(Icons.analytics),
-            label: const Text('Predict Hotspot'),
           ),
         ],
       ),

@@ -239,6 +239,54 @@ class _RecommendPageState extends State<RecommendPage> {
   Future<void> _navigateToAp(RecommendedAp ap) async {
     try {
       final position = await LocationService.getCurrentPosition();
+      final userLocation = LatLng(position.latitude, position.longitude);
+
+      // Check if user is near campus
+      if (!LocationService.isNearCampus(userLocation)) {
+        if (!mounted) return;
+        final startFromGate = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Outside Campus Area'),
+            content: const Text(
+              'You are currently outside the UAB campus area. '
+              'Navigation is only available from within the campus.\n\n'
+              'Would you like to start navigation from the campus main entrance instead?',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Start from Gate'),
+              ),
+            ],
+          ),
+        );
+        if (startFromGate != true) return;
+        // Navigate from campus gate
+        final gatePath = await _apiService.fetchRoute(
+          LocationService.campusGateLng,
+          LocationService.campusGateLat,
+          ap.lng,
+          ap.lat,
+        );
+        if (gatePath.isNotEmpty && mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (context) => RoutePage(
+                path: gatePath,
+                title: 'Navigate to ${ap.name} (from Gate)',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
       final path = await _apiService.fetchRoute(
         position.longitude,
         position.latitude,
