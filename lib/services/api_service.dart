@@ -69,55 +69,16 @@ class ApiService {
     }
   }
 
-  /// Predict REAL signal strength (dBm) based on building, floor, hour, band
-  Future<Map<String, dynamic>> predictSignalStrength(Map<String, dynamic> features) async {
-    final uri = Uri.parse('$baseUrl/predict/signal_strength');
-    final response = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(features),
-    );
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('Request failed, status code: ${response.statusCode}');
-    }
-  }
-
   /// Get signal strength heatmap data for ALL APs across campus
-  /// Returns coordinates + signal_db for each AP
+  /// Returns merged data with both AP points and smooth grid.
   /// Parameters:
   ///   [hour] - hour of day (0-23, default: current hour)
-  ///   [band] - frequency band (5 or 2.4, default: 5GHz)
-  Future<Map<String, dynamic>> getSignalHeatmap({int? hour, double band = 5.0}) async {
-    final params = <String, String>{'band': band.toString()};
+  Future<Map<String, dynamic>> getSignalHeatmap({int? hour}) async {
+    final params = <String, String>{};
     if (hour != null) {
       params['hour'] = hour.toString();
     }
     final uri = Uri.parse('$baseUrl/predict/signal_strength/heatmap').replace(queryParameters: params);
-    final response = await http.get(uri);
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('Request failed, status code: ${response.statusCode}');
-    }
-  }
-
-  /// Get smooth signal strength heatmap across entire campus grid
-  /// Uses IDW interpolation to generate a continuous color heatmap.
-  /// Parameters:
-  ///   [hour] - hour of day (0-23, default: current hour)
-  ///   [band] - frequency band (5 or 2.4, default: 5GHz)
-  ///   [resolution] - grid resolution (default: 50, higher = denser grid)
-  Future<Map<String, dynamic>> getSignalHeatmapSmooth({int? hour, double band = 5.0, int resolution = 50}) async {
-    final params = <String, String>{
-      'band': band.toString(),
-      'resolution': resolution.toString(),
-    };
-    if (hour != null) {
-      params['hour'] = hour.toString();
-    }
-    final uri = Uri.parse('$baseUrl/predict/signal_strength/heatmap_smooth').replace(queryParameters: params);
     final response = await http.get(uri);
     if (response.statusCode == 200) {
       return jsonDecode(response.body) as Map<String, dynamic>;

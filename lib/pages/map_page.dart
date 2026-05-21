@@ -8,6 +8,7 @@ import 'package:wifers_app/services/api_service.dart';
 import 'package:wifers_app/services/ap_data_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
+import 'package:wifers_app/services/cache_service.dart';
 import 'package:wifers_app/models/ap_info.dart';
 import 'package:wifers_app/pages/route_page.dart';
 import 'package:wifers_app/pages/favorites_page.dart';
@@ -36,7 +37,6 @@ class _MapPageState extends State<MapPage> {
   bool _showHeatmap = false;
   bool _isLoadingHeatmap = false;
   int _selectedHour = DateTime.now().hour;
-  final double _selectedBand = 5.0;
   Map<String, dynamic>? _heatmapData;
   final Map<String, Color> _signalColors = {
     'Excellent': const Color(0xFF00E676),  // Bright Green (strongest signal)
@@ -50,9 +50,8 @@ class _MapPageState extends State<MapPage> {
   Map<String, Map<String, dynamic>> _heatmapCache = {};
   Timer? _heatmapRefreshTimer;
 
-  // Smooth heatmap state (grid mode)
+  // Smooth heatmap state (grid mode) - loaded together with AP heatmap data
   bool _showSmoothHeatmap = false;
-  bool _isLoadingSmoothHeatmap = false;
   List<Map<String, dynamic>> _smoothHeatmapPoints = [];
 
   Future<void> _loadAps() async {
@@ -250,32 +249,25 @@ class _MapPageState extends State<MapPage> {
     });
 
     try {
-      final data = await _apiService.getSignalHeatmap(
-        hour: _selectedHour,
-        band: _selectedBand,
-      );
-      
-      final points = data['points'] as List<dynamic>;
-      final Map<String, Map<String, dynamic>> cache = {};
-      
-      for (final point in points) {
-        final map = point as Map<String, dynamic>;
-        final apName = map['ap_name'] as String;
-        cache[apName] = {
-          'signal_db': map['signal_db'],
-          'signal_quality': map['signal_quality'],
-          'bars': map['bars'],
-        };
+      // Build cache key
+      final cacheKey = 'heatmap_$_selectedHour';
+      const heatmapTtl = Duration(minutes: 30);
+
+      // Try cache first
+      final cachedData = await CacheService.get<Map<String, dynamic>>(cacheKey, ttl: heatmapTtl);
+      if (cachedData != null) {
+        _processHeatmapData(cachedData);
+        debugPrint('Loaded heatmap data (cached)');
+        return;
       }
 
-      setState(() {
-        _heatmapCache = cache;
-        _heatmapData = data;
-        _showHeatmap = true;
-        _isLoadingHeatmap = false;
-      });
-
-      debugPrint('Loaded ${cache.length} heatmap points');
+      final data = await _apiService.getSignalHeatmap(
+        hour: _selectedHour,
+      );
+      
+      // Save to cache
+      await CacheService.set(cacheKey, data);
+      _processHeatmapData(data);
     } catch (e) {
       setState(() {
         _isLoadingHeatmap = false;
@@ -288,74 +280,51 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  Future<void> _loadSmoothHeatmap() async {
-    if (_isLoadingSmoothHeatmap) return;
+  void _processHeatmapData(Map<String, dynamic> data) {
+    // 解析 AP 点数据
+    final apPointsData = data['ap_points'] as Map<String, dynamic>?;
+    final points = apPointsData?['points'] as List<dynamic>? ?? [];
+    final Map<String, Map<String, dynamic>> cache = {};
     
+    for (final point in points) {
+      final map = point as Map<String, dynamic>;
+      final apName = map['ap_name'] as String;
+      cache[apName] = {
+        'signal_db': map['signal_db'],
+        'signal_quality': map['signal_quality'],
+        'bars': map['bars'],
+      };
+    }
+
+    // 解析平滑网格数据
+    final smoothGridData = data['smooth_grid'] as Map<String, dynamic>?;
+    final smoothPoints = smoothGridData?['points'] as List<dynamic>? ?? [];
+    final parsedSmoothPoints = smoothPoints
+        .map<Map<String, dynamic>>((p) => Map<String, dynamic>.from(p as Map))
+        .toList();
+
     setState(() {
-      _isLoadingSmoothHeatmap = true;
+      _heatmapCache = cache;
+      _heatmapData = data;
+      _smoothHeatmapPoints = parsedSmoothPoints;
+      _showHeatmap = true;
+      _showSmoothHeatmap = true;
+      _isLoadingHeatmap = false;
     });
 
-    try {
-      final data = await _apiService.getSignalHeatmapSmooth(
-        hour: _selectedHour,
-        band: _selectedBand,
-        resolution: 30,
-      );
-      
-      final points = data['points'] as List<dynamic>;
-      final smoothPoints = points.map<Map<String, dynamic>>((p) => Map<String, dynamic>.from(p as Map)).toList();
-
-      setState(() {
-        _smoothHeatmapPoints = smoothPoints;
-        _showSmoothHeatmap = true;
-        _isLoadingSmoothHeatmap = false;
-      });
-
-      debugPrint('Loaded ${smoothPoints.length} smooth heatmap grid points');
-    } catch (e) {
-      setState(() {
-        _isLoadingSmoothHeatmap = false;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load smooth heatmap: $e')),
-        );
-      }
-    }
+    debugPrint('Loaded ${cache.length} AP points + ${parsedSmoothPoints.length} grid points');
   }
 
   void _toggleHeatmap() {
     if (_showHeatmap) {
       setState(() {
         _showHeatmap = false;
-      });
-    } else {
-      // Turn off smooth heatmap if active, then load point heatmap
-      if (_showSmoothHeatmap) {
-        setState(() {
-          _showSmoothHeatmap = false;
-          _smoothHeatmapPoints = [];
-        });
-      }
-      _loadHeatmap();
-    }
-  }
-
-  void _toggleSmoothHeatmap() {
-    if (_showSmoothHeatmap) {
-      setState(() {
         _showSmoothHeatmap = false;
+        _heatmapCache = {};
         _smoothHeatmapPoints = [];
       });
     } else {
-      // Turn off point heatmap if active, then load smooth heatmap
-      if (_showHeatmap) {
-        setState(() {
-          _showHeatmap = false;
-          _heatmapCache = {};
-        });
-      }
-      _loadSmoothHeatmap();
+      _loadHeatmap();
     }
   }
 
@@ -407,10 +376,7 @@ class _MapPageState extends State<MapPage> {
         _selectedHour = result;
       });
       if (_showHeatmap) {
-        _loadHeatmap(); // Refresh with new time
-      }
-      if (_showSmoothHeatmap) {
-        _loadSmoothHeatmap(); // Refresh smooth heatmap with new time
+        _loadHeatmap(); // Refresh with new time (loads both AP points and smooth grid)
       }
     }
   }
@@ -864,8 +830,9 @@ class _MapPageState extends State<MapPage> {
     final legend = _heatmapData!['legend'] as Map<String, dynamic>?;
     if (legend == null) return const SizedBox.shrink();
     
-    final totalPoints = _heatmapData!['total_points'] ?? 0;
-    final buildingsCount = _heatmapData!['buildings_count'] ?? 0;
+    final apPointsData = _heatmapData!['ap_points'] as Map<String, dynamic>? ?? {};
+    final totalPoints = apPointsData['total'] ?? 0;
+    final buildingsCount = apPointsData['buildings_count'] ?? 0;
     
     return Positioned(
       top: 10,
@@ -981,7 +948,7 @@ class _MapPageState extends State<MapPage> {
         mainAxisAlignment: MainAxisAlignment.end,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          // Point heatmap toggle button
+          // Heatmap toggle button (loads both AP points and smooth grid)
           FloatingActionButton(
             heroTag: 'heatmap',
             mini: true,
@@ -998,25 +965,7 @@ class _MapPageState extends State<MapPage> {
                     color: _showHeatmap ? Colors.white : null,
                   ),
           ),
-          const SizedBox(height: 8),
-          // Smooth heatmap toggle button
-          FloatingActionButton(
-            heroTag: 'heatmap_smooth',
-            mini: true,
-            onPressed: _toggleSmoothHeatmap,
-            backgroundColor: _showSmoothHeatmap ? Colors.blue : null,
-            child: _isLoadingSmoothHeatmap
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : Icon(
-                    Icons.grid_4x4,
-                    color: _showSmoothHeatmap ? Colors.white : null,
-                  ),
-          ),
-          if (_showHeatmap || _showSmoothHeatmap) ...[
+          if (_showHeatmap) ...[
             const SizedBox(height: 8),
             // Time picker
             FloatingActionButton(

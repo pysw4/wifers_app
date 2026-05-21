@@ -1,8 +1,0 @@
-Model,Accuracy,F1
-Decision Tree,0.98,0.978
-"Decision Tree Grid (depth=2, leaves 3)",0.976,0.974
-SVC rbf,0.933,0.908
-Naïve Bayes,0.923,0.885
-5-Neighbors,0.923,0.885
-SVC linear,0.923,0.885
-Logistic Regression,0.569,0.669

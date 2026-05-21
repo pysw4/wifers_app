@@ -1,9 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:wifers_app/services/api_service.dart';
 import 'package:wifers_app/services/ap_data_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
+import 'package:wifers_app/services/cache_service.dart';
 import 'package:wifers_app/pages/route_page.dart';
 
 class RecommendPage extends StatefulWidget {
@@ -118,6 +120,45 @@ class _RecommendPageState extends State<RecommendPage> {
     try {
       final position = await LocationService.getCurrentPosition();
       final userLocation = LatLng(position.latitude, position.longitude);
+      
+      // Build a cache key based on location (rounded to 4 decimal places ~11m precision)
+      // and current settings
+      final cacheLat = position.latitude.toStringAsFixed(4);
+      final cacheLng = position.longitude.toStringAsFixed(4);
+      final cacheKey = 'recommend_${cacheLat}_${cacheLng}_${_recommendRadiusMeters}_${_preferStableAps}';
+      
+      // Try to load from cache first
+      final settings = await StorageService.loadSettings();
+      final cacheDuration = Duration(
+        minutes: settings['cacheDurationMinutes'] as int? ?? 60,
+      );
+      
+      final cachedResult = await CacheService.get<String>(cacheKey, ttl: cacheDuration);
+      if (cachedResult != null) {
+        final decoded = jsonDecode(cachedResult) as List<dynamic>;
+        final cachedAps = decoded.map((item) {
+          final map = item as Map<String, dynamic>;
+          return RecommendedAp(
+            id: map['id'] as String,
+            name: map['name'] as String,
+            building: map['building'] as String,
+            floor: map['floor'] as int?,
+            lat: (map['lat'] as num).toDouble(),
+            lng: (map['lng'] as num).toDouble(),
+            distance: (map['distance'] as num).toDouble(),
+            prediction: map['prediction'] as String,
+            confidence: (map['confidence'] as num).toDouble(),
+            score: (map['score'] as num).toDouble(),
+          );
+        }).toList();
+        
+        setState(() {
+          _recommendations = cachedAps;
+          _statusMessage = 'Top ${cachedAps.length} recommendations (cached).';
+        });
+        return;
+      }
+
       final allAps = await _loadApsFromAsset();
       final nearbyAps = allAps.map((ap) {
         final distance = _distanceCalculator.as(
@@ -172,10 +213,26 @@ class _RecommendPageState extends State<RecommendPage> {
       }
 
       scoredAps.sort((a, b) => b.score.compareTo(a.score));
+      final topAps = scoredAps.take(5).toList();
+
+      // Save to cache
+      final cacheData = topAps.map((ap) => {
+        'id': ap.id,
+        'name': ap.name,
+        'building': ap.building,
+        'floor': ap.floor,
+        'lat': ap.lat,
+        'lng': ap.lng,
+        'distance': ap.distance,
+        'prediction': ap.prediction,
+        'confidence': ap.confidence,
+        'score': ap.score,
+      }).toList();
+      await CacheService.set(cacheKey, jsonEncode(cacheData));
 
       setState(() {
-        _recommendations = scoredAps.take(5).toList();
-        _statusMessage = 'Top ${_recommendations.length} recommendations ready.';
+        _recommendations = topAps;
+        _statusMessage = 'Top ${topAps.length} recommendations ready.';
       });
     } catch (e) {
       setState(() {

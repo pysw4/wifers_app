@@ -27,14 +27,7 @@ async def lifespan(app: FastAPI):
         load_ml_model()
         logger.info("ML model loaded successfully")
         
-        # 2. Load signal strength model
-        try:
-            load_signal_model()
-            logger.info("Signal strength model loaded successfully")
-        except Exception as e:
-            logger.warning(f"Signal strength model not loaded: {e}")
-        
-        # 3. Load graph (heavy, may time out - but we catch errors gracefully)
+        # 2. Load graph (heavy, may time out - but we catch errors gracefully)
         try:
             init_graph()
             _initialized = True
@@ -374,502 +367,70 @@ def predict_ap_status(features: dict):
 
 
 # ---- Signal Strength Prediction Endpoints ----
-# Predicts REAL signal strength (dBm) based on building, floor, hour, and band
-# Trained on actual signal_db values from clientes_processed.csv
+# Predicts REAL signal strength (dBm) based on building, floor, and hour
+# Uses precomputed heatmap files for instant response
 
-SIGNAL_MODEL_PATH = BASE_DIR / 'models' / 'signal_strength_model.joblib'
-SIGNAL_META_PATH = BASE_DIR / 'models' / 'signal_strength_meta.joblib'
-BUILDING_ENCODER_PATH = BASE_DIR / 'models' / 'building_encoder.joblib'
-_signal_model = None
-_signal_feature_names = None
-_building_encoder = None
-_buildings_list = None
+PRECOMPUTED_DIR = BASE_DIR / 'precomputed'
+
+# In-memory cache for precomputed heatmap data
+_heatmap_cache: dict = {}
 
 
-def load_signal_model(force: bool = False):
-    """Load the signal strength regression model (lazy-loaded)."""
-    global _signal_model, _signal_feature_names, _building_encoder, _buildings_list
-    if _signal_model is not None and not force:
-        return _signal_model, _signal_feature_names, _building_encoder, _buildings_list
-
-    if not SIGNAL_MODEL_PATH.exists():
-        logger.warning("Signal strength model not found at %s", SIGNAL_MODEL_PATH)
-        return None, None, None, None
-
-    try:
-        _signal_model = joblib.load(SIGNAL_MODEL_PATH)
-        if SIGNAL_META_PATH.exists():
-            meta = joblib.load(SIGNAL_META_PATH)
-            _signal_feature_names = meta.get('feature_names', ['building_code', 'floor', 'hour', 'band'])
-            _buildings_list = meta.get('buildings', [])
-        if BUILDING_ENCODER_PATH.exists():
-            _building_encoder = joblib.load(BUILDING_ENCODER_PATH)
-        logger.info("Loaded signal strength model from %s", SIGNAL_MODEL_PATH)
-        logger.info(f"  Buildings: {len(_buildings_list) if _buildings_list else 0}")
-        return _signal_model, _signal_feature_names, _building_encoder, _buildings_list
-    except Exception as e:
-        logger.error("Failed to load signal strength model: %s", e)
-        return None, None, None, None
+def _load_precomputed_heatmap(hour: int) -> dict:
+    """从预计算文件加载 heatmap 数据（包含 AP 点和平滑网格）"""
+    if hour not in _heatmap_cache:
+        filepath = PRECOMPUTED_DIR / f'heatmap_h{hour}.json'
+        if not filepath.exists():
+            raise HTTPException(status_code=500, detail=f"Precomputed heatmap not found for hour {hour}")
+        with open(filepath) as f:
+            import json
+            _heatmap_cache[hour] = json.load(f)
+    return _heatmap_cache[hour]
 
 
-def _build_signal_features(features: dict) -> pd.DataFrame:
+@app.get("/predict/signal_strength/heatmap")
+def get_signal_heatmap(hour: int = -1):
     """
-    Build feature vector for signal strength prediction.
+    获取热力图数据（从预计算文件读取，毫秒级响应）
     
-    Input features:
-    - building: str (building name, e.g. 'ETSE', 'FAC.DRET', 'BIBLIOTECA HUMANITATS')
-    - floor: int/float (floor number, e.g. 0, 1, 2, -1)
-    - hour: int/float (hour of day, 0-23)
-    - band: int/float (5 for 5GHz, 2.4 for 2.4GHz, default: 5)
+    返回包含两种数据：
+    - ap_points: 每个 AP 点的信号强度预测
+    - smooth_grid: IDW 插值的平滑网格
+    
+    参数:
+        hour (int, 默认当前时间): 小时 (0-23)
     """
-    global _building_encoder, _buildings_list
-    
-    building_name = str(features.get('building', 'Unknown'))
-    floor = float(features.get('floor', 0) or 0)
-    hour = float(features.get('hour', 12) or 12)
-    band = float(features.get('band', 5.0) or 5.0)
-    
-    # Encode building name
-    building_code = 0  # default fallback
-    if _building_encoder is not None:
-        if building_name in _building_encoder.classes_:
-            building_code = int(_building_encoder.transform([building_name])[0])
-        elif _buildings_list:
-            # Try to find closest match
-            for i, b in enumerate(_buildings_list):
-                if building_name.lower() in b.lower() or b.lower() in building_name.lower():
-                    building_code = i
-                    break
-    
-    signal_features = {
-        'building_code': building_code,
-        'floor': floor,
-        'hour': hour,
-        'band': band,
-    }
-    
-    df = pd.DataFrame([signal_features])
-    return df
-
-
-def _dbm_to_quality_text(dbm: float) -> dict:
-    """Convert dBm value to quality description.
-    
-    Color scheme: Green (strong) → Yellow → Orange → Red (weak)
-    """
-    if dbm >= -50:
-        return {"quality": "Excellent", "color": "#00E676", "bars": 5}
-    elif dbm >= -60:
-        return {"quality": "Good", "color": "#76FF03", "bars": 4}
-    elif dbm >= -70:
-        return {"quality": "Fair", "color": "#FFEA00", "bars": 3}
-    elif dbm >= -80:
-        return {"quality": "Weak", "color": "#FF6D00", "bars": 2}
-    else:
-        return {"quality": "Very Poor", "color": "#D50000", "bars": 1}
-
-
-@app.post("/predict/signal_strength")
-def predict_signal_strength(features: dict):
-    """
-    Predict REAL signal strength (dBm) based on building, floor, hour, and band.
-    
-    Uses Random Forest regression model trained on 355,522 real client signal measurements.
-    
-    Input:
-    - building (required): Building name (e.g. 'ETSE', 'FAC.DRET', 'BIBLIOTECA HUMANITATS')
-    - floor (optional, default: 0): Floor number
-    - hour (optional, default: current): Hour of day (0-23)
-    - band (optional, default: 5): Frequency band (5 for 5GHz, 2.4 for 2.4GHz)
-    
-    Returns:
-    - signal_db: Predicted signal strength in dBm (-97 to -22 range)
-    - quality: Quality description (Excellent/Good/Fair/Weak/Very Poor)
-    - bars: Signal bars (1-5)
-    """
-    model, _, _, buildings = load_signal_model()
-    if model is None:
-        raise HTTPException(status_code=503, detail="Signal strength model not available")
-    
-    # Set default hour to current time if not provided
-    if 'hour' not in features or features['hour'] is None:
+    if hour < 0 or hour > 23:
         from datetime import datetime
-        features['hour'] = datetime.now().hour
+        hour = datetime.now().hour
     
-    df = _build_signal_features(features)
-    predicted_dbm = float(model.predict(df)[0])
-    
-    quality_info = _dbm_to_quality_text(predicted_dbm)
-    
-    return {
-        "signal_db": round(predicted_dbm, 1),
-        "signal_quality": quality_info["quality"],
-        "bars": quality_info["bars"],
-        "target_unit": "dBm",
-        "model": "RandomForestRegressor (trained on real signal data)",
-        "n_training_samples": 355522,
-        "features_used": {
-            "building": str(features.get('building', 'Unknown')),
-            "floor": float(features.get('floor', 0) or 0),
-            "hour": float(features.get('hour', 12) or 12),
-            "band": float(features.get('band', 5.0) or 5.0),
-        }
-    }
+    return _load_precomputed_heatmap(hour)
 
 
 @app.get("/predict/signal_strength/buildings")
 def list_available_buildings():
-    """List all buildings available for signal strength prediction."""
-    _, _, _, buildings = load_signal_model()
-    if not buildings:
-        raise HTTPException(status_code=503, detail="Signal strength model not available")
+    """列出所有可用的建筑（从预计算数据中提取）"""
+    data = _load_precomputed_heatmap(0)
+    ap_points = data.get("ap_points", {})
     return {
-        "buildings": buildings,
-        "count": len(buildings),
-        "model_path": str(SIGNAL_MODEL_PATH)
+        "buildings": ap_points.get("buildings", []),
+        "count": ap_points.get("buildings_count", 0),
     }
 
 
-@app.get("/predict/signal_strength/heatmap")
-def get_signal_heatmap(hour: float = -1, band: float = 5.0):
-    """
-    Generate heatmap data: predicted signal strength for ALL APs across all buildings.
-    Returns GeoJSON-like format with coordinates + predicted signal_db.
-    
-    This endpoint processes all APs from the GeoJSON file and predicts
-    signal strength for each based on its building, floor, and given time.
-    
-    Use this data to render a color-coded heatmap on the frontend.
-    """
-    import json as _json
-    
-    model, _, _, buildings = load_signal_model()
-    if model is None:
-        raise HTTPException(status_code=503, detail="Signal strength model not available")
-    
-    # Set default hour
-    if hour < 0:
-        from datetime import datetime
-        hour = float(datetime.now().hour)
-    
-    # Load GeoJSON
-    geojson_path = BASE_DIR / 'geolocation_package' / 'data' / 'aps_geolocalizados_wgs84.geojson'
-    if not geojson_path.exists():
-        raise HTTPException(status_code=404, detail="GeoJSON file not found")
-    
-    with open(geojson_path) as f:
-        geojson_data = _json.load(f)
-    
-    heatmap_points = []
-    processed_buildings = set()
-    
-    for feature in geojson_data['features']:
-        props = feature['properties']
-        coords = feature['geometry']['coordinates']
-        
-        ap_name = props.get('USER_NOM_A', 'Unknown')
-        building = props.get('USER_EDIFI', 'Unknown')
-        floor = props.get('Num_Planta', 0)
-        
-        if building == 'Unknown' or not building:
-            continue
-        
-        # Predict signal for this AP's building/floor
-        signal_features = {
-            'building': building,
-            'floor': float(floor) if floor is not None else 0.0,
-            'hour': hour,
-            'band': band,
-        }
-        
-        try:
-            df = _build_signal_features(signal_features)
-            predicted_dbm = float(model.predict(df)[0])
-        except Exception:
-            continue
-        
-        quality_info = _dbm_to_quality_text(predicted_dbm)
-        
-        heatmap_points.append({
-            "lat": float(coords[1]),
-            "lng": float(coords[0]),
-            "signal_db": round(predicted_dbm, 1),
-            "signal_quality": quality_info["quality"],
-            "bars": quality_info["bars"],
-            "ap_name": ap_name,
-            "building": building,
-            "floor": int(floor) if floor is not None else 0,
-        })
-        processed_buildings.add(building)
-    
+@app.get("/cache/status")
+def cache_status():
+    """查看缓存状态"""
     return {
-        "type": "heatmap",
-        "hour": hour,
-        "band": band,
-        "total_points": len(heatmap_points),
-        "buildings_count": len(processed_buildings),
-        "buildings": sorted(list(processed_buildings)),
-        "points": heatmap_points,
-        "legend": {
-            "Excellent": {"min_db": -50, "max_db": 0, "color": "green", "bars": 5},
-            "Good": {"min_db": -60, "max_db": -50, "color": "yellow", "bars": 4},
-            "Fair": {"min_db": -70, "max_db": -60, "color": "orange", "bars": 3},
-            "Weak": {"min_db": -80, "max_db": -70, "color": "red", "bars": 2},
-            "Very Poor": {"min_db": -100, "max_db": -80, "color": "darkred", "bars": 1},
-        }
-    }
-
-
-# 平滑热力图结果缓存：键为 (hour, band)，避免重复计算
-_heatmap_smooth_cache: dict = {}
-
-@app.get("/predict/signal_strength/heatmap_smooth")
-def get_signal_heatmap_smooth(hour: float = -1, band: float = 5.0, resolution: int = 30):
-    """
-    平滑热力图端点 (Smooth Heatmap)
-    
-    在全校园区域生成一个密集的经纬度网格，对每个网格点使用反距离加权插值 (IDW)
-    预测信号强度，生成连续渐变的信号热力图。
-    
-    参数:
-        hour (float, 默认当前时间): 预测的小时 (0-23)
-        band (float, 默认 5.0): 频段 (5 或 2.4)
-        resolution (int, 默认 50): 网格密度（行数=列数=resolution），值越高网格越密
-                                   - 50 → ~2500 个点，点间距约 30 米
-                                   - 30 → ~900 个点，点间距约 50 米
-                                   - 80 → ~6400 个点，点间距约 18 米
-    
-    返回:
-        type: "heatmap_smooth"
-        grid_size: 网格尺寸 (rows, cols)
-        total_points: 总点数
-        bounds: 校园边界坐标
-        points: 每个网格点的经纬度 + 预测信号强度 + 质量等级
-        legend: 颜色映射图例
-    """
-    import json as _json
-    from math import radians, cos, sin, asin, sqrt
-
-    model, _, _, buildings = load_signal_model()
-    if model is None:
-        raise HTTPException(status_code=503, detail="Signal strength model not available")
-
-    # 设置默认时间
-    if hour < 0:
-        from datetime import datetime
-        hour = float(datetime.now().hour)
-
-    # 检查缓存：相同 hour + band 的结果直接返回，避免重复计算
-    cache_key = (int(hour), float(band))
-    if cache_key in _heatmap_smooth_cache:
-        logger.info(f"Returning cached smooth heatmap for hour={hour}, band={band}")
-        return _heatmap_smooth_cache[cache_key]
-
-    # ================================================================
-    # 第一步：加载 GeoJSON 中的所有 AP，预测每个 AP 的信号强度
-    #         同时记录每个 AP 的经纬度坐标和预测值
-    # ================================================================
-    geojson_path = BASE_DIR / 'geolocation_package' / 'data' / 'aps_geolocalizados_wgs84.geojson'
-    if not geojson_path.exists():
-        raise HTTPException(status_code=404, detail="GeoJSON file not found")
-
-    with open(geojson_path) as f:
-        geojson_data = _json.load(f)
-
-    # 存储 AP 点的列表: [(lat, lng, signal_db), ...]
-    ap_points = []
-    ap_building_map = {}
-
-    for feature in geojson_data['features']:
-        props = feature['properties']
-        coords = feature['geometry']['coordinates']
-
-        ap_name = props.get('USER_NOM_A', 'Unknown')
-        building = props.get('USER_EDIFI', 'Unknown')
-        floor = props.get('Num_Planta', 0)
-
-        if building == 'Unknown' or not building:
-            continue
-
-        # 预测该 AP 位置的信号强度
-        signal_features = {
-            'building': building,
-            'floor': float(floor) if floor is not None else 0.0,
-            'hour': hour,
-            'band': band,
-        }
-
-        try:
-            df = _build_signal_features(signal_features)
-            predicted_dbm = float(model.predict(df)[0])
-        except Exception:
-            continue
-
-        lat = float(coords[1])
-        lng = float(coords[0])
-
-        ap_points.append({
-            'lat': lat,
-            'lng': lng,
-            'signal_db': predicted_dbm,
-            'building': building,
-            'floor': int(floor) if floor is not None else 0,
-        })
-
-        # 记录每个建筑物的 AP 列表（用于后续加权）
-        if building not in ap_building_map:
-            ap_building_map[building] = []
-        ap_building_map[building].append({
-            'lat': lat,
-            'lng': lng,
-            'signal_db': predicted_dbm,
-        })
-
-    if not ap_points:
-        raise HTTPException(status_code=500, detail="No AP data available for heatmap generation")
-
-    # ================================================================
-    # 第二步：确定校园边界，生成密集经纬度网格
-    # ================================================================
-    # UAB 校园边界 (从全局变量 UAB_bbox 获取)
-    north, south, east, west = UAB_bbox  # 41.50736, 41.49505, 2.11543, 2.09491
-
-    # 在边界内加一点内缩，避免边缘网格点落在校园外
-    margin_lat = (north - south) * 0.02
-    margin_lng = (east - west) * 0.02
-    lat_min = south + margin_lat
-    lat_max = north - margin_lat
-    lng_min = west + margin_lng
-    lng_max = east - margin_lng
-
-    # 生成网格
-    lat_steps = resolution
-    lng_steps = resolution
-    lat_grid = [lat_min + (lat_max - lat_min) * i / (lat_steps - 1) for i in range(lat_steps)]
-    lng_grid = [lng_min + (lng_max - lng_min) * i / (lng_steps - 1) for i in range(lng_steps)]
-
-
-    def haversine_distance(lat1, lng1, lat2, lng2):
-        """计算两点间的大圆距离 (单位: 米)"""
-        R = 6371000  # 地球半径 (米)
-        dlat = radians(lat2 - lat1)
-        dlng = radians(lng2 - lng1)
-        a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
-        c = 2 * asin(sqrt(a))
-        return R * c
-
-
-    def idw_interpolate(target_lat, target_lng, source_points, power=2, max_dist=300):
-        """
-        反距离加权插值 (Inverse Distance Weighting)
-        
-        参数:
-            target_lat, target_lng: 待插值点的坐标
-            source_points: 源数据点列表，每项为 {'lat': ..., 'lng': ..., 'signal_db': ...}
-            power: 距离的幂次（越大则近处点的权重越大），默认 2
-            max_dist: 最大有效距离（米），超过此距离的点不考虑
-        
-        返回:
-            插值后的信号强度值 (dBm)
-        """
-        weights = []
-        values = []
-        total_weight = 0.0
-
-        for pt in source_points:
-            dist = haversine_distance(target_lat, target_lng, pt['lat'], pt['lng'])
-            if dist < 1:  # 几乎重合
-                return pt['signal_db']
-            if dist > max_dist:  # 距离太远，忽略
-                continue
-            w = 1.0 / (dist ** power)
-            weights.append(w)
-            values.append(pt['signal_db'])
-            total_weight += w
-
-        if total_weight == 0:
-            return None  # 没有足够的邻近点
-
-        weighted_avg = sum(w * v for w, v in zip(weights, values)) / total_weight
-        return weighted_avg
-
-
-    # ================================================================
-    # 第三步：对每个网格点进行 IDW 插值
-    #         用该点附近所有 AP 的预测信号值按距离加权平均
-    #         同时考虑建筑物信息：同一建筑物的 AP 权重加成
-    # ================================================================
-    smooth_points = []
-    total = lat_steps * lng_steps
-    processed_count = 0
-
-    for lat in lat_grid:
-        for lng in lng_grid:
-            # 标准 IDW：用所有 AP 点做插值（默认 max_dist=300，仅考虑 300m 内的 AP）
-            signal = idw_interpolate(lat, lng, ap_points, power=2)
-            
-            if signal is None:
-                continue  # 该点无有效邻近 AP，跳过
-
-            quality_info = _dbm_to_quality_text(signal)
-            
-            smooth_points.append({
-                "lat": round(lat, 6),
-                "lng": round(lng, 6),
-                "signal_db": round(signal, 1),
-                "signal_quality": quality_info["quality"],
-                "bars": quality_info["bars"],
-            })
-            processed_count += 1
-
-    logger.info(f"Smooth heatmap generated: {processed_count}/{total} grid points with signal estimates")
-
-    result = {
-        "type": "heatmap_smooth",
-        "hour": hour,
-        "band": band,
-        "grid_size": {"rows": lat_steps, "cols": lng_steps, "total": total, "estimated": processed_count},
-        "bounds": {
-            "north": lat_max,
-            "south": lat_min,
-            "east": lng_max,
-            "west": lng_min,
+        "heatmap_cache": {
+            "size": len(_heatmap_cache),
+            "hours_loaded": sorted(_heatmap_cache.keys()),
         },
-        "total_points": len(smooth_points),
-        "points": smooth_points,
-        "legend": {
-            "Excellent": {"min_db": -50, "max_db": 0, "color": "green", "bars": 5},
-            "Good": {"min_db": -60, "max_db": -50, "color": "yellow", "bars": 4},
-            "Fair": {"min_db": -70, "max_db": -60, "color": "orange", "bars": 3},
-            "Weak": {"min_db": -80, "max_db": -70, "color": "red", "bars": 2},
-            "Very Poor": {"min_db": -100, "max_db": -80, "color": "darkred", "bars": 1},
+        "precomputed_files": {
+            "total_hours": 24,
+            "directory": str(PRECOMPUTED_DIR),
         }
     }
-    _heatmap_smooth_cache[cache_key] = result
-    return result
-
-
-@app.get("/predict/signal_strength/predict")
-def predict_signal_strength_get(
-    building: str,
-    floor: float = 0,
-    hour: float = -1,
-    band: float = 5.0
-):
-    """
-    GET endpoint for signal strength prediction (easier to test in browser).
-    """
-    if hour < 0:
-        from datetime import datetime
-        hour = float(datetime.now().hour)
-    
-    features = {
-        'building': building,
-        'floor': floor,
-        'hour': hour,
-        'band': band
-    }
-    return predict_signal_strength(features)
 
 
 if __name__ == "__main__":

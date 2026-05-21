@@ -50,6 +50,7 @@ app.*.map.json
 cache/
 models/
 results/
+precomputed/
 train_signal_model_v2.py
 train_signal_model.py
 find_paths.py

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/ap_info.dart';
+import 'cache_service.dart';
 
 class StorageService {
   static const String _favoritesKey = 'favorite_aps';
@@ -80,6 +81,8 @@ class StorageService {
     await prefs.remove('recommend_cache');
     await prefs.remove('recommend_cache_time');
     await prefs.remove('recommend_params');
+    // Also clear the new CacheService
+    await CacheService.clearAll();
   }
 
   static Future<void> resetSettings() async {
