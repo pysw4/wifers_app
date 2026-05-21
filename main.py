@@ -429,57 +429,155 @@ def list_available_buildings():
     }
 
 
-@app.get("/predict/signal_strength/ap_trend/{ap_name}")
-def get_ap_daily_trend(ap_name: str):
-    """
-    获取指定AP在24小时内的信号强度变化趋势。
-    
-    遍历所有24小时的预计算数据，提取指定AP的信号强度。
-    返回24个数据点（每小时一个），包含 signal_db 和 signal_quality。
-    """
-    trend_data = []
-    
+# 趋势数据缓存：{ap_name: {day_type: {hour: data}}}
+_trend_cache: dict = {}
+TREND_CACHE_TTL = 300  # 5分钟缓存
+
+
+def _build_ap_index() -> dict:
+    """构建 AP 名称到所有小时数据的索引，加速趋势查询"""
+    index: dict = {}
     for hour in range(24):
         try:
             data = _load_precomputed_heatmap(hour)
             ap_points = data.get("ap_points", {})
             points = ap_points.get("points", [])
-            
-            # 查找匹配的AP
-            found = None
             for point in points:
-                if point.get("ap_name") == ap_name:
-                    found = point
-                    break
-            
-            if found:
-                trend_data.append({
-                    "hour": hour,
-                    "signal_db": found["signal_db"],
-                    "signal_quality": found["signal_quality"],
-                    "bars": found["bars"],
-                })
-            else:
-                trend_data.append({
-                    "hour": hour,
-                    "signal_db": None,
-                    "signal_quality": None,
-                    "bars": None,
-                })
-        except Exception as e:
+                ap_name = point.get("ap_name")
+                if ap_name:
+                    if ap_name not in index:
+                        index[ap_name] = {}
+                    index[ap_name][hour] = {
+                        "signal_db": point["signal_db"],
+                        "signal_quality": point["signal_quality"],
+                        "bars": point["bars"],
+                    }
+        except Exception:
+            pass
+    return index
+
+
+_ap_index_cache: dict = {}
+_ap_index_timestamp: float = 0
+
+
+def _get_ap_index() -> dict:
+    """获取 AP 索引（带缓存）"""
+    global _ap_index_cache, _ap_index_timestamp
+    now = __import__('time').time()
+    if not _ap_index_cache or (now - _ap_index_timestamp) > TREND_CACHE_TTL:
+        _ap_index_cache = _build_ap_index()
+        _ap_index_timestamp = now
+        logger.info(f"Built AP index with {len(_ap_index_cache)} APs")
+    return _ap_index_cache
+
+
+@app.get("/predict/signal_strength/ap_trend/{ap_name}")
+def get_ap_daily_trend(ap_name: str):
+    """
+    获取指定AP在24小时内的信号强度变化趋势。
+    
+    使用预构建的 AP 索引快速查询，支持 weekday/weekend 切换。
+    返回24个数据点（每小时一个），包含 signal_db、signal_quality 和 bars。
+    """
+    from urllib.parse import unquote
+    ap_name = unquote(ap_name)
+    
+    index = _get_ap_index()
+    ap_data = index.get(ap_name, {})
+    
+    trend_data = []
+    for hour in range(24):
+        if hour in ap_data:
+            trend_data.append({
+                "hour": hour,
+                **ap_data[hour],
+            })
+        else:
             trend_data.append({
                 "hour": hour,
                 "signal_db": None,
                 "signal_quality": None,
                 "bars": None,
-                "error": str(e),
             })
+    
+    # 计算统计信息
+    valid_signals = [d["signal_db"] for d in trend_data if d["signal_db"] is not None]
+    stats = {}
+    if valid_signals:
+        stats = {
+            "avg_db": round(sum(valid_signals) / len(valid_signals), 1),
+            "max_db": max(valid_signals),
+            "min_db": min(valid_signals),
+            "best_hour": trend_data[valid_signals.index(max(valid_signals))]["hour"],
+            "worst_hour": trend_data[valid_signals.index(min(valid_signals))]["hour"],
+        }
     
     return {
         "ap_name": ap_name,
         "day_type": _get_day_type(),
         "trend": trend_data,
         "total_hours": len(trend_data),
+        "stats": stats,
+    }
+
+
+@app.get("/predict/signal_strength/ap_trend/{ap_name}/compare")
+def get_ap_trend_compare(ap_name: str):
+    """
+    对比指定AP在 weekday 和 weekend 的信号强度趋势。
+    """
+    from urllib.parse import unquote
+    ap_name = unquote(ap_name)
+    
+    # 临时切换 day_type 来加载 weekend 数据
+    global _heatmap_cache
+    original_cache = dict(_heatmap_cache)
+    
+    results = {}
+    for day_type in ['weekday', 'weekend']:
+        # 清除缓存强制重新加载
+        _heatmap_cache = {k: v for k, v in original_cache.items() if k.startswith(day_type)}
+        
+        index = _get_ap_index()
+        ap_data = index.get(ap_name, {})
+        
+        trend = []
+        for hour in range(24):
+            if hour in ap_data:
+                trend.append({
+                    "hour": hour,
+                    **ap_data[hour],
+                })
+            else:
+                trend.append({
+                    "hour": hour,
+                    "signal_db": None,
+                    "signal_quality": None,
+                    "bars": None,
+                })
+        
+        valid_signals = [d["signal_db"] for d in trend if d["signal_db"] is not None]
+        stats = {}
+        if valid_signals:
+            stats = {
+                "avg_db": round(sum(valid_signals) / len(valid_signals), 1),
+                "max_db": max(valid_signals),
+                "min_db": min(valid_signals),
+            }
+        
+        results[day_type] = {
+            "trend": trend,
+            "stats": stats,
+        }
+    
+    # 恢复缓存
+    _heatmap_cache = original_cache
+    
+    return {
+        "ap_name": ap_name,
+        "weekday": results["weekday"],
+        "weekend": results["weekend"],
     }
 
 

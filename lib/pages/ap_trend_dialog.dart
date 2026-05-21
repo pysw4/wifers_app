@@ -23,6 +23,8 @@ class _APTrendDialogState extends State<APTrendDialog> {
   String? _error;
   List<Map<String, dynamic>> _trendData = [];
   String _dayType = 'weekday';
+  Map<String, dynamic> _stats = {};
+  bool _showBars = true; // 切换折线图/柱状图
 
   @override
   void initState() {
@@ -39,6 +41,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
       setState(() {
         _trendData = trend;
         _dayType = data['day_type'] as String? ?? 'weekday';
+        _stats = data['stats'] as Map<String, dynamic>? ?? {};
         _isLoading = false;
       });
     } catch (e) {
@@ -71,11 +74,11 @@ class _APTrendDialogState extends State<APTrendDialog> {
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      insetPadding: const EdgeInsets.all(16),
+      insetPadding: const EdgeInsets.all(12),
       child: Container(
         width: double.maxFinite,
-        constraints: const BoxConstraints(maxHeight: 520),
-        padding: const EdgeInsets.all(20),
+        constraints: const BoxConstraints(maxHeight: 580),
+        padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -92,7 +95,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
                       Text(
                         widget.apName,
                         style: const TextStyle(
-                          fontSize: 18,
+                          fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -100,7 +103,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
                         Text(
                           widget.building!,
                           style: TextStyle(
-                            fontSize: 13,
+                            fontSize: 12,
                             color: Colors.grey[600],
                           ),
                         ),
@@ -124,12 +127,19 @@ class _APTrendDialogState extends State<APTrendDialog> {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             Text(
               '24-Hour Signal Strength Trend',
-              style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
             ),
-            const Divider(height: 20),
+
+            // 统计信息行
+            if (_stats.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              _buildStatsRow(),
+            ],
+
+            const Divider(height: 16),
 
             // 图表区域
             Expanded(
@@ -158,19 +168,88 @@ class _APTrendDialogState extends State<APTrendDialog> {
                       : _buildChart(),
             ),
 
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
 
-            // 关闭按钮
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Close'),
-              ),
+            // 底部操作栏
+            Row(
+              children: [
+                // 切换图表类型
+                TextButton.icon(
+                  onPressed: () => setState(() => _showBars = !_showBars),
+                  icon: Icon(
+                    _showBars ? Icons.show_chart : Icons.bar_chart,
+                    size: 18,
+                  ),
+                  label: Text(
+                    _showBars ? 'Line' : 'Bars',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                const Spacer(),
+                // 关闭按钮
+                SizedBox(
+                  width: 100,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Close'),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildStatsRow() {
+    final avg = _stats['avg_db'] as num?;
+    final maxDb = _stats['max_db'] as num?;
+    final minDb = _stats['min_db'] as num?;
+    final bestHour = _stats['best_hour'] as int?;
+    final worstHour = _stats['worst_hour'] as int?;
+
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: Colors.grey[50],
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.grey[200]!),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildStatItem(Icons.show_chart, 'Avg', '${avg?.toStringAsFixed(1) ?? "-"} dBm', _dbmToColor(avg?.toDouble() ?? -70)),
+          _buildStatItem(Icons.arrow_upward, 'Best', '${maxDb?.toStringAsFixed(1) ?? "-"} dBm', Colors.green),
+          _buildStatItem(Icons.arrow_downward, 'Worst', '${minDb?.toStringAsFixed(1) ?? "-"} dBm', Colors.red),
+          if (bestHour != null)
+            _buildStatItem(Icons.access_time, 'Peak', '${bestHour}:00', Colors.blue),
+          if (worstHour != null)
+            _buildStatItem(Icons.access_time, 'Low', '${worstHour}:00', Colors.orange),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatItem(IconData icon, String label, String value, Color color) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 14, color: color),
+        const SizedBox(height: 2),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(
+          label,
+          style: TextStyle(fontSize: 9, color: Colors.grey[500]),
+        ),
+      ],
     );
   }
 
@@ -197,7 +276,6 @@ class _APTrendDialogState extends State<APTrendDialog> {
       if (db < minDb) minDb = db;
       if (db > maxDb) maxDb = db;
     }
-    // 留一些边距
     minDb -= 3;
     maxDb += 3;
 
@@ -208,7 +286,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
       return FlSpot(hour, db);
     }).toList();
 
-    // 构建柱状图数据（用 bars 字段）
+    // 构建柱状图数据
     final barData = validData.map((d) {
       final hour = (d['hour'] as num).toDouble();
       final bars = (d['bars'] as num?)?.toDouble() ?? 0;
@@ -225,184 +303,175 @@ class _APTrendDialogState extends State<APTrendDialog> {
       );
     }).toList();
 
-    return Column(
-      children: [
-        // 信号强度折线图
-        Expanded(
-          flex: 3,
-          child: LineChart(
-            LineChartData(
-              gridData: FlGridData(
-                show: true,
-                drawVerticalLine: false,
-                horizontalInterval: 10,
-                getDrawingHorizontalLine: (value) => FlLine(
-                  color: Colors.grey.withValues(alpha: 0.15),
-                  strokeWidth: 1,
-                ),
+    if (_showBars) {
+      return BarChart(
+        BarChartData(
+          gridData: FlGridData(
+            show: true,
+            drawVerticalLine: false,
+            getDrawingHorizontalLine: (value) => FlLine(
+              color: Colors.grey.withValues(alpha: 0.15),
+              strokeWidth: 1,
+            ),
+          ),
+          titlesData: FlTitlesData(
+            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            leftTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                reservedSize: 20,
+                interval: 1,
+                getTitlesWidget: (value, meta) {
+                  return Text(
+                    '${value.toInt()}',
+                    style: const TextStyle(fontSize: 9),
+                  );
+                },
               ),
-              titlesData: FlTitlesData(
-                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    interval: 4,
-                    reservedSize: 22,
-                    getTitlesWidget: (value, meta) {
-                      if (value % 4 == 0) {
-                        return Text(
-                          '${value.toInt()}:00',
-                          style: const TextStyle(fontSize: 10),
-                        );
-                      }
-                      return const SizedBox.shrink();
-                    },
-                  ),
-                ),
-                leftTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 36,
-                    interval: 10,
-                    getTitlesWidget: (value, meta) {
-                      return Text(
-                        '${value.toInt()} dBm',
-                        style: const TextStyle(fontSize: 9),
-                      );
-                    },
-                  ),
-                ),
-              ),
-              borderData: FlBorderData(
-                show: true,
-                border: Border.all(color: Colors.grey.withValues(alpha: 0.2)),
-              ),
-              minX: 0,
-              maxX: 23,
-              minY: minDb,
-              maxY: maxDb,
-              lineBarsData: [
-                LineChartBarData(
-                  spots: spots,
-                  isCurved: true,
-                  curveSmoothness: 0.3,
-                  color: Colors.blue,
-                  barWidth: 2.5,
-                  isStrokeCapRound: true,
-                  dotData: FlDotData(
-                    show: true,
-                    getDotPainter: (spot, percent, barData, index) {
-                      final db = spot.y;
-                      return FlDotCirclePainter(
-                        radius: 3,
-                        color: _dbmToColor(db),
-                        strokeWidth: 1.5,
-                        strokeColor: Colors.white,
-                      );
-                    },
-                  ),
-                  belowBarData: BarAreaData(
-                    show: true,
-                    color: Colors.blue.withValues(alpha: 0.08),
-                  ),
-                ),
-              ],
-              lineTouchData: LineTouchData(
-                touchTooltipData: LineTouchTooltipData(
-                  getTooltipItems: (touchedSpots) {
-                    return touchedSpots.map((spot) {
-                      final db = spot.y;
-                      final quality = _dbmToQuality(db);
-                      return LineTooltipItem(
-                        '${spot.x.toInt()}:00\n${db.toStringAsFixed(1)} dBm\n$quality',
-                        TextStyle(
-                          color: _dbmToColor(db),
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      );
-                    }).toList();
-                  },
-                ),
+            ),
+            bottomTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                interval: 4,
+                reservedSize: 22,
+                getTitlesWidget: (value, meta) {
+                  if (value % 4 == 0) {
+                    return Text(
+                      '${value.toInt()}:00',
+                      style: const TextStyle(fontSize: 10),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
               ),
             ),
           ),
-        ),
-        const SizedBox(height: 8),
-        // 信号格数柱状图
-        Expanded(
-          flex: 2,
-          child: BarChart(
-            BarChartData(
-              gridData: FlGridData(
-                show: true,
-                drawVerticalLine: false,
-                getDrawingHorizontalLine: (value) => FlLine(
-                  color: Colors.grey.withValues(alpha: 0.15),
-                  strokeWidth: 1,
-                ),
-              ),
-              titlesData: FlTitlesData(
-                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                leftTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 20,
-                    interval: 1,
-                    getTitlesWidget: (value, meta) {
-                      return Text(
-                        '${value.toInt()}',
-                        style: const TextStyle(fontSize: 9),
-                      );
-                    },
+          borderData: FlBorderData(
+            show: true,
+            border: Border.all(color: Colors.grey.withValues(alpha: 0.2)),
+          ),
+          barGroups: barData,
+          barTouchData: BarTouchData(
+            touchTooltipData: BarTouchTooltipData(
+              getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                final data = validData.firstWhere(
+                  (d) => (d['hour'] as num).toInt() == group.x,
+                );
+                final db = (data['signal_db'] as num).toDouble();
+                return BarTooltipItem(
+                  '${group.x}:00\nBars: ${rod.toY.toInt()}\n${db.toStringAsFixed(1)} dBm',
+                  TextStyle(
+                    color: _dbmToColor(db),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
                   ),
-                ),
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    interval: 4,
-                    reservedSize: 22,
-                    getTitlesWidget: (value, meta) {
-                      if (value % 4 == 0) {
-                        return Text(
-                          '${value.toInt()}:00',
-                          style: const TextStyle(fontSize: 10),
-                        );
-                      }
-                      return const SizedBox.shrink();
-                    },
-                  ),
-                ),
-              ),
-              borderData: FlBorderData(
-                show: true,
-                border: Border.all(color: Colors.grey.withValues(alpha: 0.2)),
-              ),
-              barGroups: barData,
-              barTouchData: BarTouchData(
-                touchTooltipData: BarTouchTooltipData(
-                  getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                    final data = validData.firstWhere(
-                      (d) => (d['hour'] as num).toInt() == group.x,
-                    );
-                    final db = (data['signal_db'] as num).toDouble();
-                    return BarTooltipItem(
-                      '${group.x}:00\nBars: ${rod.toY.toInt()}\n${db.toStringAsFixed(1)} dBm',
-                      TextStyle(
-                        color: _dbmToColor(db),
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
-                    );
-                  },
-                ),
-              ),
+                );
+              },
             ),
           ),
         ),
-      ],
+      );
+    }
+
+    // 折线图模式
+    return LineChart(
+      LineChartData(
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          horizontalInterval: 10,
+          getDrawingHorizontalLine: (value) => FlLine(
+            color: Colors.grey.withValues(alpha: 0.15),
+            strokeWidth: 1,
+          ),
+        ),
+        titlesData: FlTitlesData(
+          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              interval: 4,
+              reservedSize: 22,
+              getTitlesWidget: (value, meta) {
+                if (value % 4 == 0) {
+                  return Text(
+                    '${value.toInt()}:00',
+                    style: const TextStyle(fontSize: 10),
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+          ),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 36,
+              interval: 10,
+              getTitlesWidget: (value, meta) {
+                return Text(
+                  '${value.toInt()} dBm',
+                  style: const TextStyle(fontSize: 9),
+                );
+              },
+            ),
+          ),
+        ),
+        borderData: FlBorderData(
+          show: true,
+          border: Border.all(color: Colors.grey.withValues(alpha: 0.2)),
+        ),
+        minX: 0,
+        maxX: 23,
+        minY: minDb,
+        maxY: maxDb,
+        lineBarsData: [
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            curveSmoothness: 0.3,
+            color: Colors.blue,
+            barWidth: 2.5,
+            isStrokeCapRound: true,
+            dotData: FlDotData(
+              show: true,
+              getDotPainter: (spot, percent, barData, index) {
+                final db = spot.y;
+                return FlDotCirclePainter(
+                  radius: 3,
+                  color: _dbmToColor(db),
+                  strokeWidth: 1.5,
+                  strokeColor: Colors.white,
+                );
+              },
+            ),
+            belowBarData: BarAreaData(
+              show: true,
+              color: Colors.blue.withValues(alpha: 0.08),
+            ),
+          ),
+        ],
+        lineTouchData: LineTouchData(
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipItems: (touchedSpots) {
+              return touchedSpots.map((spot) {
+                final db = spot.y;
+                final quality = _dbmToQuality(db);
+                return LineTooltipItem(
+                  '${spot.x.toInt()}:00\n${db.toStringAsFixed(1)} dBm\n$quality',
+                  TextStyle(
+                    color: _dbmToColor(db),
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                );
+              }).toList();
+            },
+          ),
+        ),
+      ),
     );
   }
 
