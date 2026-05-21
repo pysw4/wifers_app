@@ -39,6 +39,25 @@ class ApDataService {
     }).toList();
   }
 
+  /// Load unique building names from the GeoJSON asset.
+  static Future<List<String>> loadBuildings() async {
+    final geojson = await rootBundle.loadString(_geojsonPath);
+    final Map<String, dynamic> data =
+        json.decode(geojson) as Map<String, dynamic>;
+    final features = data['features'] as List<dynamic>;
+
+    final Set<String> buildings = {};
+    for (final feature in features) {
+      final props = Map<String, dynamic>.from(feature['properties'] as Map);
+      final building = props['USER_EDIFI']?.toString() ??
+          props['Nom_Edific']?.toString() ??
+          'Unknown';
+      buildings.add(building);
+    }
+    final sorted = buildings.toList()..sort();
+    return sorted;
+  }
+
   /// Load all APs as raw maps (for [RecommendPage] which needs raw data).
   static Future<List<Map<String, dynamic>>> loadAllApsAsMaps() async {
     final geojson = await rootBundle.loadString(_geojsonPath);

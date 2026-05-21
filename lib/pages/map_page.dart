@@ -371,7 +371,7 @@ class _MapPageState extends State<MapPage> {
                           foregroundColor: isSelected ? Colors.white : null,
                         ),
                         onPressed: () => Navigator.pop(context, index),
-                        child: Text('$index:00'),
+                        child: Text('$index'),
 
                       ),
                     );
@@ -468,6 +468,11 @@ class _MapPageState extends State<MapPage> {
                   icon: Icons.directions,
                   label: 'Navigate',
                   onPressed: () => _navigateToAP(ap),
+                ),
+                _buildActionButton(
+                  icon: Icons.directions_car,
+                  label: 'From Gate',
+                  onPressed: () => _navigateFromGate(ap),
                 ),
                 _buildActionButton(
                   icon: Icons.trending_up,
@@ -641,7 +646,42 @@ class _MapPageState extends State<MapPage> {
   }
 
   /// Navigate from the campus main entrance to the target AP.
+  /// 当用户位置不可用时，弹出对话框询问是否从校门开始导航。
   Future<void> _navigateFromGate(APInfo ap) async {
+    // 先关闭 bottom sheet
+    Navigator.of(context, rootNavigator: true).pop();
+
+    // 检查是否有可用位置
+    if (_currentLocation != null) {
+      // 用户有位置信息，直接使用当前位置导航
+      _navigateToAP(ap);
+      return;
+    }
+
+    // 位置不可用，弹出对话框询问是否从校门导航
+    if (!mounted) return;
+    final startFromGate = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Location Unavailable'),
+        content: const Text(
+          'Your current location is not available.\n\n'
+          'Would you like to start navigation from the campus main entrance instead?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Start from Gate'),
+          ),
+        ],
+      ),
+    );
+    if (startFromGate != true) return;
+
     try {
       final routeResult = await _apiService.fetchAdvancedRoute(
         LocationService.campusGateLng,

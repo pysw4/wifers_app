@@ -8,7 +8,9 @@ import 'package:wifers_app/pages/route_page.dart';
 import 'package:wifers_app/pages/predictor_page.dart';
 
 class FavoritesPage extends StatefulWidget {
-  const FavoritesPage({super.key});
+  final VoidCallback? onSwitchToMap;
+
+  const FavoritesPage({super.key, this.onSwitchToMap});
 
   @override
   State<FavoritesPage> createState() => _FavoritesPageState();
@@ -160,130 +162,111 @@ class _FavoritesPageState extends State<FavoritesPage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Favorite APs'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          if (_favorites.isNotEmpty)
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: 'Refresh',
-              onPressed: _loadFavorites,
-            ),
-        ],
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : _favorites.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(
-                        Icons.favorite_border,
-                        size: 64,
+    return _isLoading
+        ? const Center(child: CircularProgressIndicator())
+        : _favorites.isEmpty
+            ? Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(
+                      Icons.favorite_border,
+                      size: 64,
+                      color: Colors.grey,
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      _statusMessage ?? 'No favorites yet',
+                      style: const TextStyle(
+                        fontSize: 16,
                         color: Colors.grey,
                       ),
-                      const SizedBox(height: 16),
-                      Text(
-                        _statusMessage ?? 'No favorites yet',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          color: Colors.grey,
-                        ),
-                        textAlign: TextAlign.center,
-                      ),
-                      const SizedBox(height: 24),
-                      ElevatedButton.icon(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.map),
-                        label: const Text('Go to Map'),
-                      ),
-                    ],
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _loadFavorites,
-                  child: ListView.builder(
-                    padding: const EdgeInsets.all(16.0),
-                    itemCount: _favorites.length,
-                    itemBuilder: (context, index) {
-                      final ap = _favorites[index];
-                      return Card(
-                        margin: const EdgeInsets.only(bottom: 12),
-                        child: ListTile(
-                          leading: const CircleAvatar(
-                            child: Icon(Icons.wifi),
-                          ),
-                          title: Text(
-                            ap.name ?? 'AP ${index + 1}',
-                            style: const TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('${ap.building}${ap.height != null ? ', Floor ${ap.height}' : ''}'),
-                              Text(
-                                '${ap.lat.toStringAsFixed(4)}, ${ap.lng.toStringAsFixed(4)}',
-                                style: const TextStyle(fontSize: 12, color: Colors.grey),
-                              ),
-                            ],
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: const Icon(Icons.directions, color: Colors.blue),
-                                tooltip: 'Navigate',
-                                onPressed: () => _navigateToAP(ap),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.analytics, color: Colors.green),
-                                tooltip: 'Predict Status',
-                                onPressed: () => _predictAP(ap),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.delete, color: Colors.red),
-                                tooltip: 'Remove from favorites',
-                                onPressed: () {
-                                  showDialog(
-                                    context: context,
-                                    builder: (context) => AlertDialog(
-                                      title: const Text('Remove Favorite'),
-                                      content: Text('Remove ${ap.name ?? 'AP'} from favorites?'),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () => Navigator.pop(context),
-                                          child: const Text('Cancel'),
-                                        ),
-                                        TextButton(
-                                          onPressed: () {
-                                            Navigator.pop(context);
-                                            _removeFavorite(ap);
-                                          },
-                                          child: const Text('Remove'),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                },
-                              ),
-                            ],
-                          ),
-                          isThreeLine: true,
-                        ),
-                      );
-                    },
-                  ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton.icon(
+                      onPressed: () {
+                        widget.onSwitchToMap?.call();
+                      },
+                      icon: const Icon(Icons.map),
+                      label: const Text('Go to Map'),
+                    ),
+                  ],
                 ),
-      floatingActionButton: _favorites.isNotEmpty
-          ? FloatingActionButton.extended(
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(Icons.map),
-              label: const Text('Open Map'),
-            )
-          : null,
-    );
+              )
+            : RefreshIndicator(
+                onRefresh: _loadFavorites,
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(16.0),
+                  itemCount: _favorites.length,
+                  itemBuilder: (context, index) {
+                    final ap = _favorites[index];
+                    return Card(
+                      margin: const EdgeInsets.only(bottom: 12),
+                      child: ListTile(
+                        leading: const CircleAvatar(
+                          child: Icon(Icons.wifi),
+                        ),
+                        title: Text(
+                          ap.name ?? 'AP ${index + 1}',
+                          style: const TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                        subtitle: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('${ap.building}${ap.height != null ? ', Floor ${ap.height}' : ''}'),
+                            Text(
+                              '${ap.lat.toStringAsFixed(4)}, ${ap.lng.toStringAsFixed(4)}',
+                              style: const TextStyle(fontSize: 12, color: Colors.grey),
+                            ),
+                          ],
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.directions, color: Colors.blue),
+                              tooltip: 'Navigate',
+                              onPressed: () => _navigateToAP(ap),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.analytics, color: Colors.green),
+                              tooltip: 'Predict Status',
+                              onPressed: () => _predictAP(ap),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              tooltip: 'Remove from favorites',
+                              onPressed: () {
+                                showDialog(
+                                  context: context,
+                                  builder: (context) => AlertDialog(
+                                    title: const Text('Remove Favorite'),
+                                    content: Text('Remove ${ap.name ?? 'AP'} from favorites?'),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () => Navigator.pop(context),
+                                        child: const Text('Cancel'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () {
+                                          Navigator.pop(context);
+                                          _removeFavorite(ap);
+                                        },
+                                        child: const Text('Remove'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                        isThreeLine: true,
+                      ),
+                    );
+                  },
+                ),
+              );
   }
 }

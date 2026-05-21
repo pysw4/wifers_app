@@ -12,7 +12,8 @@ class RecommendPage extends StatefulWidget {
   const RecommendPage({super.key});
 
   @override
-  State<RecommendPage> createState() => _RecommendPageState();
+  State<RecommendPage> createState() => RecommendPageState();
+
 }
 
 class RecommendedAp {
@@ -43,7 +44,7 @@ class RecommendedAp {
   });
 }
 
-class _RecommendPageState extends State<RecommendPage> {
+class RecommendPageState extends State<RecommendPage> {
   final ApiService _apiService = ApiService();
   final Distance _distanceCalculator = const Distance();
   bool _isLoading = false;
@@ -53,6 +54,8 @@ class _RecommendPageState extends State<RecommendPage> {
   int _recommendRadiusMeters = 500;
   String _recommendMode = 'balanced';
   List<RecommendedAp> _recommendations = [];
+  List<String> _buildings = [];
+  String _selectedBuilding = '';
 
   // Cache for signal strength predictions per AP
   final Map<String, Map<String, dynamic>> _signalCache = {};
@@ -68,16 +71,50 @@ class _RecommendPageState extends State<RecommendPage> {
   void initState() {
     super.initState();
     _loadSettings();
+    _loadBuildings();
     _updateLocationLabel();
+  }
+
+  /// Public method to reload settings from storage (called when switching tabs)
+  void reloadSettings() {
+    _loadSettings();
   }
 
   Future<void> _loadSettings() async {
     final settings = await StorageService.loadSettings();
+    if (!mounted) return;
     setState(() {
       _preferStableAps = settings['preferStableAps'] ?? true;
       _recommendRadiusMeters = settings['recommendRadiusMeters'] ?? 500;
       _recommendMode = settings['recommendMode'] as String? ?? 'balanced';
+      _selectedBuilding = settings['selectedBuilding'] as String? ?? '';
     });
+  }
+
+  /// Save only the mode to storage without overwriting other settings
+  Future<void> _saveModeToStorage(String mode) async {
+    final settings = await StorageService.loadSettings();
+    settings['recommendMode'] = mode;
+    await StorageService.saveSettings(settings);
+  }
+
+  /// Save the selected building to storage
+  Future<void> _saveBuildingToStorage(String building) async {
+    final settings = await StorageService.loadSettings();
+    settings['selectedBuilding'] = building;
+    await StorageService.saveSettings(settings);
+  }
+
+  Future<void> _loadBuildings() async {
+
+    try {
+      final buildings = await ApDataService.loadBuildings();
+      setState(() {
+        _buildings = buildings;
+      });
+    } catch (e) {
+      debugPrint('Failed to load buildings: $e');
+    }
   }
 
   String get _modeLabel {
@@ -328,7 +365,11 @@ class _RecommendPageState extends State<RecommendPage> {
           LatLng(ap['lat'] as double, ap['lng'] as double),
         );
         return {...ap, 'distance': distance};
-      }).where((ap) => (ap['distance'] as double) <= _recommendRadiusMeters).toList();
+      }).where((ap) {
+        final withinRadius = (ap['distance'] as double) <= _recommendRadiusMeters;
+        final matchesBuilding = _selectedBuilding.isEmpty || ap['building'] == _selectedBuilding;
+        return withinRadius && matchesBuilding;
+      }).toList();
 
       if (nearbyAps.isEmpty) {
         setState(() {
@@ -535,20 +576,85 @@ class _RecommendPageState extends State<RecommendPage> {
             ),
             const SizedBox(height: 8),
 
-            // Mode indicator
-            Row(
-              children: [
-                Icon(_modeIconData, size: 16, color: _modeColor),
-                const SizedBox(width: 6),
-                Text(
-                  'Mode: $_modeLabel',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: _modeColor,
-                  ),
+            // Mode selector
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<String>(
+                segments: _modeDisplay.entries.map((entry) {
+                  return ButtonSegment<String>(
+                    value: entry.key,
+                    label: Text(entry.value.label, style: const TextStyle(fontSize: 11)),
+                    icon: Icon(entry.value.icon, size: 16),
+                  );
+                }).toList(),
+                selected: {_recommendMode},
+                onSelectionChanged: (Set<String> selection) {
+                  final newMode = selection.first;
+                  setState(() {
+                    _recommendMode = newMode;
+                  });
+                  // Persist to storage (merge with existing settings)
+                  _saveModeToStorage(newMode);
+                },
+
+                showSelectedIcon: false,
+                style: ButtonStyle(
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
-              ],
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Building selector
+            Card(
+              margin: EdgeInsets.zero,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.business, size: 18, color: Colors.grey[600]),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _buildings.contains(_selectedBuilding) ? _selectedBuilding : '',
+                          isExpanded: true,
+                          hint: const Text('All Buildings', style: TextStyle(fontSize: 14)),
+                          items: [
+                            const DropdownMenuItem<String>(
+                              value: '',
+                              child: Text('All Buildings', style: TextStyle(fontSize: 14)),
+                            ),
+                            ..._buildings.map((building) => DropdownMenuItem<String>(
+                              value: building,
+                              child: Text(building, style: const TextStyle(fontSize: 14)),
+                            )),
+                          ],
+                          onChanged: (String? value) {
+                            if (value != null) {
+                              setState(() {
+                                _selectedBuilding = value;
+                              });
+                              _saveBuildingToStorage(value);
+                            }
+                          },
+                        ),
+                      ),
+                    ),
+                    if (_selectedBuilding.isNotEmpty)
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _selectedBuilding = '';
+                          });
+                          _saveBuildingToStorage('');
+                        },
+                        child: Icon(Icons.close, size: 16, color: Colors.grey[400]),
+                      ),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(height: 12),
 

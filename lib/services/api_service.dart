@@ -7,6 +7,7 @@ class ApiService {
   static const String baseUrl = 'https://wifers-app.onrender.com';
 
   Future<List<LatLng>> fetchRoute(double lng, double lat, double destLng, double destLat) async {
+    // Backend expects: /route/{lat}/{lng}/{dest_lat}/{dest_lng}
     final uri = Uri.parse('$baseUrl/route/$lat/$lng/$destLat/$destLng');
     final response = await http.get(uri);
     if (response.statusCode == 200) {

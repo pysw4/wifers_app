@@ -5,10 +5,11 @@ class SettingPage extends StatefulWidget {
   const SettingPage({super.key});
 
   @override
-  State<SettingPage> createState() => _SettingPageState();
+  State<SettingPage> createState() => SettingPageState();
+
 }
 
-class _SettingPageState extends State<SettingPage> {
+class SettingPageState extends State<SettingPage> {
   bool _notificationsEnabled = true;
   bool _cachePredictions = true;
   bool _lowPowerLocation = true;
@@ -44,9 +45,16 @@ class _SettingPageState extends State<SettingPage> {
     _loadSettings();
   }
 
+  /// Public method to reload settings from storage (called when switching tabs)
+  void reloadSettings() {
+    _loadSettings();
+  }
+
   Future<void> _loadSettings() async {
     final settings = await StorageService.loadSettings();
+    if (!mounted) return;
     setState(() {
+
       _notificationsEnabled = settings['notificationsEnabled'] ?? true;
       _cachePredictions = settings['cachePredictions'] ?? true;
       _cacheDurationMinutes = settings['cacheDurationMinutes'] ?? 60;
