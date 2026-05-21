@@ -12,6 +12,7 @@ import 'package:wifers_app/services/cache_service.dart';
 import 'package:wifers_app/models/ap_info.dart';
 import 'package:wifers_app/pages/route_page.dart';
 import 'package:wifers_app/pages/favorites_page.dart';
+import 'package:wifers_app/pages/ap_trend_dialog.dart';
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -469,6 +470,11 @@ class _MapPageState extends State<MapPage> {
                   label: const Text('Navigate'),
                 ),
                 ElevatedButton.icon(
+                  onPressed: () => _showAPTrend(ap),
+                  icon: const Icon(Icons.trending_up),
+                  label: const Text('24h Trend'),
+                ),
+                ElevatedButton.icon(
                   onPressed: () => _favoriteAP(ap),
                   icon: const Icon(Icons.favorite),
                   label: const Text('Favorite'),
@@ -680,6 +686,17 @@ class _MapPageState extends State<MapPage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('${ap.name ?? 'AP'} added to favorites')),
+    );
+  }
+
+  void _showAPTrend(APInfo ap) {
+    Navigator.pop(context); // 关闭 bottom sheet
+    showDialog(
+      context: context,
+      builder: (context) => APTrendDialog(
+        apName: ap.name ?? ap.id ?? 'Unknown AP',
+        building: ap.building,
+      ),
     );
   }
 

@@ -86,5 +86,17 @@ class ApiService {
       throw Exception('Request failed, status code: ${response.statusCode}');
     }
   }
+
+  /// Get 24-hour signal strength trend for a specific AP.
+  /// Returns hourly data points with signal_db, signal_quality, and bars.
+  Future<Map<String, dynamic>> getAPDailyTrend(String apName) async {
+    final uri = Uri.parse('$baseUrl/predict/signal_strength/ap_trend/$apName');
+    final response = await http.get(uri);
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } else {
+      throw Exception('Request failed, status code: ${response.statusCode}');
+    }
+  }
 }
 
