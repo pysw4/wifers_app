@@ -542,8 +542,11 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _navigateToAP(APInfo ap) async {
-    Navigator.pop(context);
+    // 先关闭 bottom sheet（使用 rootNavigator 确保只关闭 bottom sheet 不 pop 页面）
+    Navigator.of(context, rootNavigator: true).pop();
+    
     if (_currentLocation == null) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Current location not available')),
       );
@@ -555,7 +558,7 @@ class _MapPageState extends State<MapPage> {
       if (!mounted) return;
       final startFromGate = await showDialog<bool>(
         context: context,
-        builder: (context) => AlertDialog(
+        builder: (dialogContext) => AlertDialog(
           title: const Text('Outside Campus Area'),
           content: const Text(
             'You are currently outside the UAB campus area. '
@@ -564,11 +567,11 @@ class _MapPageState extends State<MapPage> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(context, false),
+              onPressed: () => Navigator.pop(dialogContext, false),
               child: const Text('Cancel'),
             ),
             TextButton(
-              onPressed: () => Navigator.pop(context, true),
+              onPressed: () => Navigator.pop(dialogContext, true),
               child: const Text('Start from Gate'),
             ),
           ],
