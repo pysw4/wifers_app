@@ -55,8 +55,8 @@ predictor2_0.py
 train_signal_model.py
 train_signal_model_v2.py
 
-# Deployment config (not needed in repo)
-requirements.txt
-render.yaml
+# Deployment config
+# requirements.txt
+# render.yaml
 description.txt
 # geolocation_package/  # 取消注释以排除地理数据包
