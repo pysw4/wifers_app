@@ -42,7 +42,8 @@ class _RoutePageState extends State<RoutePage> {
   
   StreamSubscription<Position>? _positionSubscription;
   LatLng? _currentLocation;
-  bool _followUser = true;
+  bool _followUser = false;
+  bool _locationAvailable = false;
   double _currentZoom = 15.0;
   int _selectedRouteIndex = 0;
   List<List<LatLng>> _allRoutes = [];
@@ -88,8 +89,15 @@ class _RoutePageState extends State<RoutePage> {
   Future<void> _startLocationTracking() async {
     final hasPermission = await _handleLocationPermission();
     if (!hasPermission) {
+      setState(() {
+        _locationAvailable = false;
+      });
       return;
     }
+
+    setState(() {
+      _locationAvailable = true;
+    });
 
     _positionSubscription = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
@@ -238,13 +246,14 @@ class _RoutePageState extends State<RoutePage> {
       appBar: AppBar(
         title: Text(widget.title),
         actions: [
-          IconButton(
-            icon: Icon(
-              _followUser ? Icons.location_searching : Icons.location_disabled,
+          if (_locationAvailable)
+            IconButton(
+              icon: Icon(
+                _followUser ? Icons.location_searching : Icons.location_disabled,
+              ),
+              tooltip: _followUser ? 'Following user location' : 'Tap to follow',
+              onPressed: _toggleFollow,
             ),
-            tooltip: _followUser ? 'Following user location' : 'Tap to follow',
-            onPressed: _toggleFollow,
-          ),
           if (_alternatives.isEmpty && !_isLoadingAlternatives)
             IconButton(
               icon: const Icon(Icons.alt_route),
