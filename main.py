@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import networkx as nx
 import pandas as pd
@@ -15,7 +16,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 使用 lifespan 上下文管理器替代已弃用的 @app.on_event("startup")
+# Use lifespan context manager instead of deprecated @app.on_event("startup")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and cleanup application resources."""
@@ -39,18 +40,32 @@ async def lifespan(app: FastAPI):
         logger.error(f"Startup initialization failed: {e}")
         _initialized = False
     
-    yield  # 应用运行中
+    yield  # Application running
     
-    # 关闭时的清理工作
+    # Cleanup on shutdown
     logger.info("Shutting down application...")
 
 
 app = FastAPI(lifespan=lifespan)
 
+# CORS middleware — allow Flutter Web frontend to call the API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://wifers-app-web.onrender.com",
+        "http://localhost:3000",
+        "http://localhost:5000",
+        "http://localhost:8000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Global variables for lazy-loaded resources
 G = None
 G_AP_nodes = None
-G_road = None  # 只包含路网节点（整数节点）的子图，用于 nearest_nodes 查询
+G_road = None  # Subgraph containing only road nodes (integer nodes), used for nearest_nodes queries
 ml_model = None
 model_path = None
 _initialized = False
@@ -84,8 +99,8 @@ def init_graph(force: bool = False):
     osm_bbox = (UAB_bbox[3], UAB_bbox[1], UAB_bbox[2], UAB_bbox[0])
     G = ox.graph_from_bbox(bbox=osm_bbox, network_type="walk")
     
-    # 创建只包含路网节点（整数节点）的子图，用于 nearest_nodes 查询
-    # 这样 ox.distance.nearest_nodes 永远不会返回 AP 字符串节点
+    # Create subgraph containing only road nodes (integer nodes) for nearest_nodes queries
+    # This ensures ox.distance.nearest_nodes never returns AP string nodes
     road_nodes = [n for n in G.nodes() if not isinstance(n, str)]
     G_road = G.subgraph(road_nodes).copy()
     logger.info(f"Created road subgraph with {len(G_road.nodes())} nodes")
@@ -149,11 +164,11 @@ def _build_feature_dataframe(features: dict) -> pd.DataFrame:
 
 
 def _to_prediction_label(prediction) -> str:
-    """将模型预测结果统一转换为 'Up' / 'Down' 字符串。
+    """Convert model prediction to 'Up' / 'Down' string.
     
-    兼容两种情况：
-    - 旧模型: classes_ = ['Down', 'Up']，predict 返回字符串
-    - 新模型: classes_ = [0, 1]，predict 返回整数
+    Compatible with both cases:
+    - Old model: classes_ = ['Down', 'Up'], predict returns string
+    - New model: classes_ = [0, 1], predict returns integer
     """
     if prediction == 'Up' or prediction == 1:
         return 'Up'
@@ -165,15 +180,15 @@ def _up_probability_from_proba(proba: np.ndarray) -> float:
     if hasattr(ml_model, 'classes_'):
         try:
             classes = list(ml_model.classes_)
-            # 兼容整数类标 [0, 1] 和字符串类标 ['Down', 'Up']
+            # Compatible with integer labels [0, 1] and string labels ['Down', 'Up']
             for up_label in [1, 'Up', 'up']:
                 if up_label in classes:
                     return float(proba[classes.index(up_label)])
         except Exception:
             pass
     if proba.shape[-1] == 2:
-        # Use the probability of the positive class when class labels are unknown.
-        # proba[1] 通常是正类概率
+            # Use the probability of the positive class when class labels are unknown.
+        # proba[1] is typically the positive class probability
         return float(proba[1])
     return float(proba[-1])
 
@@ -250,7 +265,7 @@ def route(lat: float, lng: float, dest_lat: float, dest_lng: float):
     
     logger.info(f"Route request: from ({lat}, {lng}) to ({dest_lat}, {dest_lng})")
     try:
-        # 使用 G_road（只包含路网节点的子图）查找最近节点，确保不会返回 AP 字符串节点
+        # Use G_road (subgraph containing only road nodes) to find nearest nodes, ensuring no AP string nodes are returned
         source_node = int(ox.distance.nearest_nodes(G_road, lng, lat))
         dest_node = int(ox.distance.nearest_nodes(G_road, dest_lng, dest_lat))
         logger.info(f"Nearest road nodes: source={source_node}, dest={dest_node}")
@@ -270,20 +285,21 @@ def route(lat: float, lng: float, dest_lat: float, dest_lng: float):
 
 def _resolve_to_road_node(G, node_id, lat=None, lng=None):
     """
-    如果 node_id 是 AP 节点（字符串类型），找到它最近的 OSM 路网节点。
-    OSM 路网节点是整数类型。
+    If node_id is an AP node (string type), find its nearest OSM road node.
+    OSM road nodes are integer type.
     
-    使用欧几里得距离手动找最近的路网节点，避免 ox.distance.nearest_nodes 的兼容性问题。
+    Uses Euclidean distance to manually find the nearest road node,
+    avoiding compatibility issues with ox.distance.nearest_nodes.
     """
-    # 如果节点已经是整数（OSM 路网节点），直接返回
-    # 兼容 numpy 整数类型（numpy.int64, numpy.int32 等）
+    # If node is already an integer (OSM road node), return directly
+    # Compatible with numpy integer types (numpy.int64, numpy.int32, etc.)
     if isinstance(node_id, (int, np.integer)):
         return int(node_id)
     
-    # 如果是字符串节点（AP 或室内节点），找最近的 OSM 路网节点
+    # If it's a string node (AP or indoor node), find nearest OSM road node
     logger.info(f"Node '{node_id}' is a string node, finding nearest road node")
     
-    # 获取该节点的坐标
+    # Get node coordinates
     if node_id in G:
         node_lat = G.nodes[node_id].get('y', lat)
         node_lng = G.nodes[node_id].get('x', lng)
@@ -295,22 +311,22 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
         logger.warning(f"Node '{node_id}' has no coordinates, cannot resolve")
         return node_id
     
-    # 收集所有路网节点
-    # 注意：OSM 节点 ID 可能是 numpy.int64 类型，也可能是 Python int 类型
-    # 使用更宽松的检查：排除字符串类型的就是路网节点
+    # Collect all road nodes
+    # Note: OSM node IDs may be numpy.int64 or Python int type
+    # Use lenient check: exclude string types to identify road nodes
     road_nodes = []
     for n in G.nodes():
         if isinstance(n, str):
-            continue  # 跳过 AP 节点和室内节点
+            continue  # Skip AP nodes and indoor nodes
         try:
-            int(n)  # 如果能转为 int，就是路网节点
+            int(n)  # If it can be converted to int, it's a road node
             road_nodes.append(n)
         except (ValueError, TypeError):
             continue
     
     if not road_nodes:
         logger.warning(f"No road nodes found in graph! Total nodes: {len(G.nodes())}")
-        # 调试：打印前10个节点的类型
+        # Debug: print first 10 node types
         for i, n in enumerate(G.nodes()):
             if i >= 10:
                 break
@@ -319,14 +335,14 @@ def _resolve_to_road_node(G, node_id, lat=None, lng=None):
     
     logger.info(f"Searching among {len(road_nodes)} road nodes for nearest to ({node_lat}, {node_lng})")
     
-    # 手动计算欧几里得距离找最近的路网节点
+    # Manually calculate Euclidean distance to find nearest road node
     try:
         import math
         best_node = None
         best_dist = float('inf')
         for rn in road_nodes:
             try:
-                # OSM 节点可能使用 'y'/'x' 或 'lat'/'lon' 键
+                # OSM nodes may use 'y'/'x' or 'lat'/'lon' keys
                 rn_lat = G.nodes[rn].get('y', G.nodes[rn].get('lat', None))
                 rn_lng = G.nodes[rn].get('x', G.nodes[rn].get('lon', None))
                 if rn_lat is None or rn_lng is None:
@@ -361,7 +377,7 @@ def advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acc
     error_msg = ""  # Store error for fallback message
     
     try:
-        # 使用 G_road（只包含路网节点的子图）查找最近节点，确保不会返回 AP 字符串节点
+        # Use G_road (subgraph containing only road nodes) to find nearest nodes, ensuring no AP string nodes are returned
         source_node = int(ox.distance.nearest_nodes(G_road, lng, lat))
         dest_node = int(ox.distance.nearest_nodes(G_road, dest_lng, dest_lat))
         logger.info(f"Advanced route: source={source_node}, dest={dest_node}")
@@ -494,14 +510,14 @@ _heatmap_cache: dict = {}
 
 
 def _get_day_type() -> str:
-    """根据当前日期返回 'weekday' 或 'weekend'"""
+    """Return 'weekday' or 'weekend' based on current date"""
     from datetime import datetime
     today = datetime.now()
     return 'weekend' if today.weekday() >= 5 else 'weekday'
 
 
 def _load_precomputed_heatmap(hour: int) -> dict:
-    """从预计算文件加载 heatmap 数据（自动区分 weekday/weekend）"""
+    """Load heatmap data from precomputed file (auto-distinguishes weekday/weekend)"""
     day_type = _get_day_type()
     cache_key = f'{day_type}_{hour}'
     
@@ -518,15 +534,15 @@ def _load_precomputed_heatmap(hour: int) -> dict:
 @app.get("/predict/signal_strength/heatmap")
 def get_signal_heatmap(hour: int = -1):
     """
-    获取热力图数据（从预计算文件读取，毫秒级响应）
+    Get heatmap data (read from precomputed file, millisecond response)
     
-    自动根据当前日期区分 weekday/weekend，返回对应的热力图数据。
-    返回包含两种数据：
-    - ap_points: 每个 AP 点的信号强度预测
-    - smooth_grid: IDW 插值的平滑网格
+    Automatically distinguishes weekday/weekend based on current date.
+    Returns two types of data:
+    - ap_points: Signal strength prediction for each AP point
+    - smooth_grid: IDW interpolated smooth grid
     
-    参数:
-        hour (int, 默认当前时间): 小时 (0-23)
+    Args:
+        hour (int, default current time): Hour (0-23)
     """
     if hour < 0 or hour > 23:
         from datetime import datetime
@@ -537,7 +553,7 @@ def get_signal_heatmap(hour: int = -1):
 
 @app.get("/predict/signal_strength/buildings")
 def list_available_buildings():
-    """列出所有可用的建筑（从预计算数据中提取）"""
+    """List all available buildings (extracted from precomputed data)"""
     data = _load_precomputed_heatmap(0)
     ap_points = data.get("ap_points", {})
     return {
@@ -546,13 +562,13 @@ def list_available_buildings():
     }
 
 
-# 趋势数据缓存：{ap_name: {day_type: {hour: data}}}
+# Trend data cache: {ap_name: {day_type: {hour: data}}}
 _trend_cache: dict = {}
-TREND_CACHE_TTL = 300  # 5分钟缓存
+TREND_CACHE_TTL = 300  # 5 minute cache
 
 
 def _build_ap_index() -> dict:
-    """构建 AP 名称到所有小时数据的索引，加速趋势查询"""
+    """Build index mapping AP names to all hourly data, speeding up trend queries"""
     index: dict = {}
     for hour in range(24):
         try:
@@ -579,7 +595,7 @@ _ap_index_timestamp: float = 0
 
 
 def _get_ap_index() -> dict:
-    """获取 AP 索引（带缓存）"""
+    """Get AP index (with caching)"""
     global _ap_index_cache, _ap_index_timestamp
     now = __import__('time').time()
     if not _ap_index_cache or (now - _ap_index_timestamp) > TREND_CACHE_TTL:
@@ -592,10 +608,10 @@ def _get_ap_index() -> dict:
 @app.get("/predict/signal_strength/ap_trend/{ap_name}")
 def get_ap_daily_trend(ap_name: str):
     """
-    获取指定AP在24小时内的信号强度变化趋势。
+    Get the 24-hour signal strength trend for a specific AP.
     
-    使用预构建的 AP 索引快速查询，支持 weekday/weekend 切换。
-    返回24个数据点（每小时一个），包含 signal_db、signal_quality 和 bars。
+    Uses the pre-built AP index for fast queries, supports weekday/weekend switching.
+    Returns 24 data points (one per hour), including signal_db, signal_quality, and bars.
     """
     from urllib.parse import unquote
     ap_name = unquote(ap_name)
@@ -618,7 +634,7 @@ def get_ap_daily_trend(ap_name: str):
                 "bars": None,
             })
     
-    # 计算统计信息
+    # Calculate statistics
     valid_signals = [d["signal_db"] for d in trend_data if d["signal_db"] is not None]
     stats = {}
     if valid_signals:
@@ -642,18 +658,18 @@ def get_ap_daily_trend(ap_name: str):
 @app.get("/predict/signal_strength/ap_trend/{ap_name}/compare")
 def get_ap_trend_compare(ap_name: str):
     """
-    对比指定AP在 weekday 和 weekend 的信号强度趋势。
+    Compare signal strength trends for a specific AP between weekday and weekend.
     """
     from urllib.parse import unquote
     ap_name = unquote(ap_name)
     
-    # 临时切换 day_type 来加载 weekend 数据
+    # Temporarily switch day_type to load weekend data
     global _heatmap_cache
     original_cache = dict(_heatmap_cache)
     
     results = {}
     for day_type in ['weekday', 'weekend']:
-        # 清除缓存强制重新加载
+        # Clear cache to force reload
         _heatmap_cache = {k: v for k, v in original_cache.items() if k.startswith(day_type)}
         
         index = _get_ap_index()
@@ -688,7 +704,7 @@ def get_ap_trend_compare(ap_name: str):
             "stats": stats,
         }
     
-    # 恢复缓存
+    # Restore cache
     _heatmap_cache = original_cache
     
     return {
@@ -700,7 +716,7 @@ def get_ap_trend_compare(ap_name: str):
 
 @app.get("/cache/status")
 def cache_status():
-    """查看缓存状态"""
+    """View cache status"""
     return {
         "heatmap_cache": {
             "size": len(_heatmap_cache),
