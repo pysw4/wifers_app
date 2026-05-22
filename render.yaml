@@ -23,3 +23,14 @@ services:
         - macos
         - web
         - build
+
+  # ---- Flutter Web Frontend ----
+  - type: web
+    name: wifers-app-web
+    runtime: image
+    dockerfilePath: Dockerfile
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: FLUTTER_WEB_BASE_HREF
+        value: /

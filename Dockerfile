@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
     libglu1-mesa \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Flutter SDK
+# Install Flutter SDK (pin to a specific stable version for reproducibility)
 RUN git clone --depth 1 --branch stable https://github.com/flutter/flutter.git /flutter
 ENV PATH="/flutter/bin:/flutter/bin/cache/dart-sdk/bin:${PATH}"
 
@@ -30,14 +30,11 @@ RUN mkdir -p /flutter/bin/cache/artifacts/gradle_wrapper && \
 # Set working directory
 WORKDIR /app
 
-# Copy project files
-COPY pubspec.yaml pubspec.lock ./
+# Copy the entire project (needed because pubspec.yaml references local assets)
+COPY . .
 
 # Run flutter pub get
 RUN flutter pub get
-
-# Copy the rest of the project
-COPY . .
 
 # Build Flutter Web (release mode)
 RUN flutter build web --release

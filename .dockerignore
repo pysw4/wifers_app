@@ -1,0 +1,59 @@
+# Git
+.git
+.gitattributes
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Flutter/Dart build artifacts
+build/
+.dart_tool/
+.pub-cache/
+.pub/
+.coverage/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Python generated data
+*.csv
+cache/
+results/
+
+# Old/unused scripts
+predictor2_0.py
+train_signal_model.py
+train_signal_model_v2.py
+
+# Documentation
+description.txt
+README.md
+PROJECT_ARCHITECTURE.md
+
+# Precomputed data (not needed for web build)
+precomputed/
+
+# Models (not needed for web build)
+models/
+
+# Geolocation package source (only need the data file)
+geolocation_package/INDEX.md
+geolocation_package/LEEME.txt
+geolocation_package/QUICK_START.md
+geolocation_package/README.md
+geolocation_package/docs/
+geolocation_package/examples/
