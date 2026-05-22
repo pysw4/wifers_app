@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-预计算热力图数据脚本（支持 weekday/weekend 区分）
-一次性生成 48 个热力图文件（24 小时 × 2 种日期类型），
-保存为静态 JSON 文件，API 直接读取返回，实现毫秒级响应。
+Pre-compute heatmap data script (supports weekday/weekend distinction)
+Generates 48 heatmap files (24 hours × 2 date types) in one go,
+saves as static JSON files for millisecond API response.
 
-用法:
+Usage:
     python precompute_heatmaps.py
 
-输出:
+Output:
     precomputed/
         weekday/
-            heatmap_h0.json  ~  heatmap_h23.json   (24 个文件)
+            heatmap_h0.json  ~  heatmap_h23.json   (24 files)
         weekend/
-            heatmap_h0.json  ~  heatmap_h23.json   (24 个文件)
+            heatmap_h0.json  ~  heatmap_h23.json   (24 files)
 """
 
 import json
@@ -26,7 +26,7 @@ import pandas as pd
 import numpy as np
 
 # =====================================================================
-# 配置
+# Configuration
 # =====================================================================
 BASE_DIR = Path(__file__).resolve().parent
 GEOJSON_PATH = BASE_DIR / 'geolocation_package' / 'data' / 'aps_geolocalizados_wgs84.geojson'
@@ -38,7 +38,7 @@ OUTPUT_DIR = BASE_DIR / 'precomputed'
 UAB_bbox = 41.50736, 41.49505, 2.11543, 2.09491  # north, south, east, west
 
 # =====================================================================
-# 加载模型和编码器
+# Load model and encoder
 # =====================================================================
 print("=" * 60)
 print("Pre-computing heatmap data for all 24 hours × weekday/weekend")
@@ -59,7 +59,7 @@ if SIGNAL_META_PATH.exists():
     print(f"  Buildings list: {len(buildings_list)} buildings")
 
 # =====================================================================
-# 加载 GeoJSON
+# Load GeoJSON
 # =====================================================================
 print("\n[2] Loading GeoJSON data...")
 with open(GEOJSON_PATH) as f:
@@ -69,10 +69,10 @@ features = geojson_data['features']
 print(f"  Loaded {len(features)} AP features from GeoJSON")
 
 # =====================================================================
-# 构建 building 编码函数
+# Build building encoding function
 # =====================================================================
 def encode_building(building_name: str) -> int:
-    """将建筑名称编码为整数"""
+    """Encode building name to integer"""
     if building_encoder is not None:
         if building_name in building_encoder.classes_:
             return int(building_encoder.transform([building_name])[0])
@@ -83,11 +83,11 @@ def encode_building(building_name: str) -> int:
     return 0
 
 # =====================================================================
-# 构建 AP 点列表
+# Build AP point list
 # =====================================================================
 print("\n[3] Computing signal strength for all APs × 24 hours × 2 day types...")
 
-# 先提取所有 AP 的基础信息
+# First extract basic info for all APs
 ap_points_base = []
 for feature in features:
     props = feature['properties']
@@ -107,11 +107,11 @@ for feature in features:
 
 print(f"  Total APs with valid building: {len(ap_points_base)}")
 
-# 预计算 building_code 避免重复编码
+# Pre-compute building_code to avoid repeated encoding
 for ap in ap_points_base:
     ap['building_code'] = encode_building(ap['building'])
 
-# 批量预测所有 AP × 24 小时 × 2 种日期类型
+# Batch predict all APs × 24 hours × 2 day types
 all_hours = list(range(24))
 day_types = [('weekday', 0), ('weekend', 1)]
 total_predictions = len(ap_points_base) * len(all_hours) * len(day_types)
@@ -121,7 +121,7 @@ print(f"  Predicting...")
 
 start_time = time.time()
 
-# 为每个小时 + 日期类型构建特征矩阵
+        # Build feature matrix for each hour + day type
 for day_type_name, is_weekend in day_types:
     for hour in all_hours:
         rows = []
@@ -130,13 +130,13 @@ for day_type_name, is_weekend in day_types:
                 'building_code': ap['building_code'],
                 'floor': ap['floor'],
                 'hour': float(hour),
-                'band': 5.0,  # 固定使用 5GHz 作为总信号强度
+                'band': 5.0,  # Fixed to use 5GHz as total signal strength
             })
         
         df = pd.DataFrame(rows)
         predictions = signal_model.predict(df)
         
-        # 将预测结果写回 ap_points_base
+        # Write predictions back to ap_points_base
         key = f'{day_type_name}_h{hour}'
         for i, ap in enumerate(ap_points_base):
             if 'signal_by_hour' not in ap:
@@ -147,7 +147,7 @@ elapsed = time.time() - start_time
 print(f"  Done in {elapsed:.1f} seconds ({total_predictions/elapsed:.0f} predictions/sec)")
 
 # =====================================================================
-# 信号质量转换函数
+# Signal quality conversion function
 # =====================================================================
 def dbm_to_quality(dbm: float) -> dict:
     if dbm >= -50:
@@ -162,11 +162,11 @@ def dbm_to_quality(dbm: float) -> dict:
         return {"quality": "Very Poor", "bars": 1}
 
 # =====================================================================
-# 生成并保存合并的热力图数据（每个小时 × 日期类型一个文件）
+# Generate and save merged heatmap data (one file per hour × day type)
 # =====================================================================
 print("\n[4] Generating merged heatmap data (AP points + smooth grid)...")
 
-# 平滑网格参数
+# Smooth grid parameters
 north, south, east, west = UAB_bbox
 margin_lat = (north - south) * 0.02
 margin_lng = (east - west) * 0.02
@@ -224,7 +224,7 @@ for day_type_name, is_weekend in day_types:
     for hour in all_hours:
         key = f'{day_type_name}_h{hour}'
         
-        # --- AP 点数据 ---
+        # --- AP point data ---
         heatmap_points = []
         processed_buildings = set()
         
@@ -244,7 +244,7 @@ for day_type_name, is_weekend in day_types:
             })
             processed_buildings.add(ap['building'])
         
-        # --- 平滑网格数据 ---
+        # --- Smooth grid data ---
         ap_points_for_idw = []
         for ap in ap_points_base:
             ap_points_for_idw.append({
@@ -271,7 +271,7 @@ for day_type_name, is_weekend in day_types:
                     "bars": quality_info["bars"],
                 })
         
-        # --- 合并输出 ---
+        # --- Merge output ---
         result = {
             "type": "heatmap",
             "hour": hour,
@@ -304,7 +304,7 @@ for day_type_name, is_weekend in day_types:
               f"({len(heatmap_points)} AP points + {len(smooth_points)} grid points)")
 
 # =====================================================================
-# 完成
+# Done
 # =====================================================================
 print("\n" + "=" * 60)
 print("Done! All heatmap data pre-computed.")

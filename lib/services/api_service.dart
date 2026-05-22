@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'package:latlong2/latlong.dart';
 
 class ApiService {
-  //  backend API base URL (ensure this matches your backend's IP and port)
-  static const String baseUrl = 'https://wifers-app.onrender.com';
+  // Backend API base URL (update this after deploying the API service)
+  static const String baseUrl = 'https://wifers-app-api.onrender.com';
 
   Future<List<LatLng>> fetchRoute(double lng, double lat, double destLng, double destLat) async {
     // Backend expects: /route/{lat}/{lng}/{dest_lat}/{dest_lng}

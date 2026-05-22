@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:wifers_app/services/api_service.dart';
 
-/// 显示指定AP在24小时内的信号强度变化趋势图表
+/// Displays the 24-hour signal strength trend chart for a specific AP
 class APTrendDialog extends StatefulWidget {
   final String apName;
   final String? building;
@@ -24,7 +24,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
   List<Map<String, dynamic>> _trendData = [];
   String _dayType = 'weekday';
   Map<String, dynamic> _stats = {};
-  bool _showBars = true; // 切换折线图/柱状图
+  bool _showBars = true; // Toggle line chart / bar chart
 
   @override
   void initState() {
@@ -83,7 +83,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 标题行
+            // Title row
             Row(
               children: [
                 const Icon(Icons.trending_up, color: Colors.blue),
@@ -133,7 +133,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
               style: TextStyle(fontSize: 12, color: Colors.grey[500]),
             ),
 
-            // 统计信息行
+            // Stats row
             if (_stats.isNotEmpty) ...[
               const SizedBox(height: 8),
               _buildStatsRow(),
@@ -141,7 +141,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
 
             const Divider(height: 16),
 
-            // 图表区域
+            // Chart area
             Expanded(
               child: _isLoading
                   ? const Center(child: CircularProgressIndicator())
@@ -170,10 +170,10 @@ class _APTrendDialogState extends State<APTrendDialog> {
 
             const SizedBox(height: 8),
 
-            // 底部操作栏
+            // Bottom action bar
             Row(
               children: [
-                // 切换图表类型
+                // Toggle chart type
                 TextButton.icon(
                   onPressed: () => setState(() => _showBars = !_showBars),
                   icon: Icon(
@@ -186,7 +186,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
                   ),
                 ),
                 const Spacer(),
-                // 关闭按钮
+                // Close button
                 SizedBox(
                   width: 100,
                   child: ElevatedButton(
@@ -254,7 +254,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
   }
 
   Widget _buildChart() {
-    // 过滤掉 null 值的数据点
+    // Filter out null data points
     final validData = _trendData
         .where((d) => d['signal_db'] != null)
         .toList();
@@ -268,7 +268,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
       );
     }
 
-    // 计算 Y 轴范围
+    // Calculate Y-axis range
     double minDb = -97;
     double maxDb = -22;
     for (final d in validData) {
@@ -279,14 +279,14 @@ class _APTrendDialogState extends State<APTrendDialog> {
     minDb -= 3;
     maxDb += 3;
 
-    // 构建折线图数据点
+    // Build line chart data points
     final spots = validData.map((d) {
       final hour = (d['hour'] as num).toDouble();
       final db = (d['signal_db'] as num).toDouble();
       return FlSpot(hour, db);
     }).toList();
 
-    // 构建柱状图数据
+    // Build bar chart data
     final barData = validData.map((d) {
       final hour = (d['hour'] as num).toDouble();
       final bars = (d['bars'] as num?)?.toDouble() ?? 0;
@@ -374,7 +374,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
       );
     }
 
-    // 折线图模式
+    // Line chart mode
     return LineChart(
       LineChartData(
         gridData: FlGridData(

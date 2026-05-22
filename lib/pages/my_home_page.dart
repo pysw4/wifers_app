@@ -20,7 +20,7 @@ class _MyHomePageState extends State<MyHomePage> {
   final _recommendPageKey = GlobalKey<RecommendPageState>();
   final _settingPageKey = GlobalKey<SettingPageState>();
 
-  // 页面标题列表
+  // Page title list
   static const List<String> _titles = [
     'Map',
     'Favorites',
