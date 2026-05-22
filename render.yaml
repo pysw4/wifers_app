@@ -14,15 +14,15 @@ services:
         value: "1"
     buildFilter:
       ignoredPaths:
-        - test/
-        - lib/
-        - android/
-        - ios/
-        - windows/
-        - linux/
-        - macos/
-        - web/
-        - build/
+        - test
+        - lib
+        - android
+        - ios
+        - windows
+        - linux
+        - macos
+        - web
+        - build
 
   # ---- Flutter Web Frontend (Docker) ----
   - type: web
