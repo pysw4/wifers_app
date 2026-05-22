@@ -1,5 +1,7 @@
 # ---- Build Stage ----
-FROM debian:bookworm-slim AS build
+FROM ubuntu:22.04 AS build
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Install dependencies for Flutter
 RUN apt-get update && apt-get install -y \
@@ -18,15 +20,12 @@ ENV PATH="/flutter/bin:/flutter/bin/cache/dart-sdk/bin:${PATH}"
 # Enable web support
 RUN flutter config --enable-web
 
-# Pre-download the Gradle wrapper tar to avoid tar ownership issues
-# The tar is extracted by flutter when running pub get, but the container's
-# tar doesn't support --no-same-owner. We download and extract it manually first.
-RUN mkdir -p /flutter/bin/cache/artifacts/gradle_wrapper && \
-    curl -sL "https://storage.googleapis.com/flutter_infra_release/gradle-wrapper/fd5c1f2c013565a3bea56ada6df9d2b8e96d56aa/gradle-wrapper.tgz" \
-    -o /tmp/gradle-wrapper.tgz && \
-    tar -xzf /tmp/gradle-wrapper.tgz -C /flutter/bin/cache/artifacts/gradle_wrapper --no-same-owner 2>/dev/null || \
-    tar -xzf /tmp/gradle-wrapper.tgz -C /flutter/bin/cache/artifacts/gradle_wrapper 2>/dev/null; \
-    chmod -R 777 /flutter/bin/cache
+# Patch Flutter to skip Gradle wrapper download (we only need web)
+# The Gradle wrapper download fails in Docker due to tar ownership issues.
+# Since we're building for web only, we can safely disable this.
+RUN sed -i 's/if (!foundVersion)/if (false)/' /flutter/packages/flutter_tools/lib/src/android/gradle_utils.dart && \
+    sed -i 's/if (!foundVersion)/if (false)/' /flutter/packages/flutter_tools/lib/src/android/gradle.dart 2>/dev/null; \
+    true
 
 # Set working directory
 WORKDIR /app
@@ -34,7 +33,7 @@ WORKDIR /app
 # Copy project files
 COPY pubspec.yaml pubspec.lock ./
 
-# Now flutter pub get should work since gradle wrapper is already cached
+# Run flutter pub get (should now skip Gradle download)
 RUN flutter pub get
 
 # Copy the rest of the project
