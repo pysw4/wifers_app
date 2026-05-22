@@ -20,12 +20,12 @@ ENV PATH="/flutter/bin:/flutter/bin/cache/dart-sdk/bin:${PATH}"
 # Enable web support
 RUN flutter config --enable-web
 
-# Patch Flutter to skip Gradle wrapper download (we only need web)
-# The Gradle wrapper download fails in Docker due to tar ownership issues.
-# Since we're building for web only, we can safely disable this.
-RUN sed -i 's/if (!foundVersion)/if (false)/' /flutter/packages/flutter_tools/lib/src/android/gradle_utils.dart && \
-    sed -i 's/if (!foundVersion)/if (false)/' /flutter/packages/flutter_tools/lib/src/android/gradle.dart 2>/dev/null; \
-    true
+# Pre-create the gradle wrapper directory and create a fake completed download marker
+# This prevents Flutter from trying to download the Gradle wrapper (which fails in Docker)
+RUN mkdir -p /flutter/bin/cache/artifacts/gradle_wrapper && \
+    mkdir -p /flutter/bin/cache/downloads/storage.googleapis.com/flutter_infra_release/gradle-wrapper && \
+    touch /flutter/bin/cache/downloads/storage.googleapis.com/flutter_infra_release/gradle-wrapper/fd5c1f2c013565a3bea56ada6df9d2b8e96d56aa && \
+    chmod -R 777 /flutter/bin/cache
 
 # Set working directory
 WORKDIR /app
@@ -33,7 +33,7 @@ WORKDIR /app
 # Copy project files
 COPY pubspec.yaml pubspec.lock ./
 
-# Run flutter pub get (should now skip Gradle download)
+# Run flutter pub get
 RUN flutter pub get
 
 # Copy the rest of the project
