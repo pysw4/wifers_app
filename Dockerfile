@@ -15,13 +15,14 @@ RUN apt-get update && apt-get install -y \
 RUN git clone --depth 1 --branch stable https://github.com/flutter/flutter.git /flutter
 ENV PATH="/flutter/bin:/flutter/bin/cache/dart-sdk/bin:${PATH}"
 
-# Pre-create cache directories with proper permissions to avoid tar ownership issues
-RUN mkdir -p /flutter/bin/cache/artifacts/gradle_wrapper && \
-    mkdir -p /flutter/bin/cache/downloads && \
-    chmod -R 777 /flutter/bin/cache
-
 # Enable web support
 RUN flutter config --enable-web
+
+# Pre-create the gradle wrapper directory and create a dummy tar to prevent download
+RUN mkdir -p /flutter/bin/cache/artifacts/gradle_wrapper && \
+    mkdir -p /flutter/bin/cache/downloads/storage.googleapis.com && \
+    touch /flutter/bin/cache/downloads/storage.googleapis.com/flutter_infra_release && \
+    chmod -R 777 /flutter/bin/cache
 
 # Set working directory
 WORKDIR /app
@@ -29,8 +30,8 @@ WORKDIR /app
 # Copy project files
 COPY pubspec.yaml pubspec.lock ./
 
-# Disable analytics and skip Android-related downloads during pub get
-RUN flutter pub get --no-precompile
+# Use dart pub get instead of flutter pub get to avoid Android Gradle download
+RUN dart pub get
 
 # Copy the rest of the project
 COPY . .
