@@ -15,17 +15,27 @@ RUN apt-get update && apt-get install -y \
 RUN git clone --depth 1 --branch stable https://github.com/flutter/flutter.git /flutter
 ENV PATH="/flutter/bin:/flutter/bin/cache/dart-sdk/bin:${PATH}"
 
-# Enable web support
-RUN flutter config --enable-web
+# Pre-create cache directories with proper permissions to avoid tar ownership issues
+RUN mkdir -p /flutter/bin/cache/artifacts/gradle_wrapper && \
+    mkdir -p /flutter/bin/cache/downloads && \
+    chmod -R 777 /flutter/bin/cache
+
+# Enable web support (skip Android/iOS artifacts)
+RUN flutter config --enable-web --no-android --no-ios
 
 # Set working directory
 WORKDIR /app
 
 # Copy project files
 COPY pubspec.yaml pubspec.lock ./
-RUN flutter pub get
 
+# Disable analytics and skip Android-related downloads during pub get
+RUN flutter pub get --no-precompile
+
+# Copy the rest of the project
 COPY . .
+
+# Build Flutter Web (release mode)
 RUN flutter build web --release
 
 # ---- Production Stage ----
