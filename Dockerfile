@@ -20,8 +20,8 @@ RUN mkdir -p /flutter/bin/cache/artifacts/gradle_wrapper && \
     mkdir -p /flutter/bin/cache/downloads && \
     chmod -R 777 /flutter/bin/cache
 
-# Enable web support (skip Android/iOS artifacts)
-RUN flutter config --enable-web --no-android --no-ios
+# Enable web support
+RUN flutter config --enable-web
 
 # Set working directory
 WORKDIR /app
