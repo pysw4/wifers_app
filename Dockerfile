@@ -18,10 +18,14 @@ ENV PATH="/flutter/bin:/flutter/bin/cache/dart-sdk/bin:${PATH}"
 # Enable web support
 RUN flutter config --enable-web
 
-# Pre-create the gradle wrapper directory and create a dummy tar to prevent download
+# Pre-download the Gradle wrapper tar to avoid tar ownership issues
+# The tar is extracted by flutter when running pub get, but the container's
+# tar doesn't support --no-same-owner. We download and extract it manually first.
 RUN mkdir -p /flutter/bin/cache/artifacts/gradle_wrapper && \
-    mkdir -p /flutter/bin/cache/downloads/storage.googleapis.com && \
-    touch /flutter/bin/cache/downloads/storage.googleapis.com/flutter_infra_release && \
+    curl -sL "https://storage.googleapis.com/flutter_infra_release/gradle-wrapper/fd5c1f2c013565a3bea56ada6df9d2b8e96d56aa/gradle-wrapper.tgz" \
+    -o /tmp/gradle-wrapper.tgz && \
+    tar -xzf /tmp/gradle-wrapper.tgz -C /flutter/bin/cache/artifacts/gradle_wrapper --no-same-owner 2>/dev/null || \
+    tar -xzf /tmp/gradle-wrapper.tgz -C /flutter/bin/cache/artifacts/gradle_wrapper 2>/dev/null; \
     chmod -R 777 /flutter/bin/cache
 
 # Set working directory
@@ -30,8 +34,8 @@ WORKDIR /app
 # Copy project files
 COPY pubspec.yaml pubspec.lock ./
 
-# Use dart pub get instead of flutter pub get to avoid Android Gradle download
-RUN dart pub get
+# Now flutter pub get should work since gradle wrapper is already cached
+RUN flutter pub get
 
 # Copy the rest of the project
 COPY . .
