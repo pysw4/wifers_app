@@ -23,4 +23,4 @@ git remote add origin git@github.com:pysw4/wifers_app.git
 git push origin gh-pages --force
 
 echo "✅ Deploy complete!"
-echo "🌐 Visit: https://wifers-app-web.onrender.com"
+echo "🌐 Visit: https://pysw4.github.io/wifers_app"
