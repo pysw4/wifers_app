@@ -8,14 +8,26 @@
     "last_modified",
     "hour",
     "mem_usage",
-    "overloaded"
+    "overloaded",
+    "day_of_week",
+    "is_weekend",
+    "month",
+    "day_of_month"
   ],
   "n_train_samples": 2130556,
   "n_test_samples": 532639,
   "down_pct": 5.63,
-  "f1_down": 0.9992,
+  "f1_down": 0.9993,
   "accuracy": 0.9999,
-  "training_date": "2026-05-21 23:54:56",
+  "training_date": "2026-05-27 02:25:40",
   "class_balanced": true,
-  "selection_metric": "f1_down"
+  "selection_metric": "f1_down",
+  "version": "v2",
+  "features_added": [
+    "day_of_week",
+    "is_weekend",
+    "month",
+    "day_of_month"
+  ],
+  "description": "\u8003\u8651\u5468\u51e0\u548c\u65e5\u671f\u7684\u5206\u7c7b\u5668\uff0c\u66f4\u7cbe\u786e"
 }

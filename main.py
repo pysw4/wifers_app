@@ -79,8 +79,13 @@ MODEL_FEATURES = [
     'last_modified',
     'hour',
     'mem_usage',
-    'overloaded'
+    'overloaded',
+    'day_of_week',
+    'is_weekend',
+    'month',
+    'day_of_month'
 ]
+
 
 MODEL_FILE_NAME = 'decision_tree.joblib'
 BASE_DIR = Path(__file__).resolve().parent
@@ -500,31 +505,35 @@ def predict_ap_status(features: dict):
 
 
 # ---- Signal Strength Prediction Endpoints ----
-# Predicts REAL signal strength (dBm) based on building, floor, and hour
+# Predicts REAL signal strength (dBm) based on building, floor, hour, and day of week
 # Uses precomputed heatmap files for instant response
 
 PRECOMPUTED_DIR = BASE_DIR / 'precomputed'
+
+# Day name mapping: 0=Mon, 6=Sun
+DAY_NAMES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 
 # In-memory cache for precomputed heatmap data
 _heatmap_cache: dict = {}
 
 
-def _get_day_type() -> str:
-    """Return 'weekday' or 'weekend' based on current date"""
+def _get_day_name() -> str:
+    """Return day name ('mon'/'tue'/.../'sun') based on current date"""
     from datetime import datetime
     today = datetime.now()
-    return 'weekend' if today.weekday() >= 5 else 'weekday'
+    return DAY_NAMES[today.weekday()]
 
 
-def _load_precomputed_heatmap(hour: int) -> dict:
-    """Load heatmap data from precomputed file (auto-distinguishes weekday/weekend)"""
-    day_type = _get_day_type()
-    cache_key = f'{day_type}_{hour}'
+def _load_precomputed_heatmap(hour: int, day_name: str = None) -> dict:
+    """Load heatmap data from precomputed file for a specific day + hour"""
+    if day_name is None:
+        day_name = _get_day_name()
+    cache_key = f'{day_name}_{hour}'
     
     if cache_key not in _heatmap_cache:
-        filepath = PRECOMPUTED_DIR / day_type / f'heatmap_h{hour}.json'
+        filepath = PRECOMPUTED_DIR / day_name / f'heatmap_h{hour}.json'
         if not filepath.exists():
-            raise HTTPException(status_code=500, detail=f"Precomputed heatmap not found for {day_type}/hour {hour}")
+            raise HTTPException(status_code=500, detail=f"Precomputed heatmap not found for {day_name}/hour {hour}")
         with open(filepath) as f:
             import json
             _heatmap_cache[cache_key] = json.load(f)
@@ -532,23 +541,25 @@ def _load_precomputed_heatmap(hour: int) -> dict:
 
 
 @app.get("/predict/signal_strength/heatmap")
-def get_signal_heatmap(hour: int = -1):
+def get_signal_heatmap(hour: int = -1, day: str = None):
     """
     Get heatmap data (read from precomputed file, millisecond response)
     
-    Automatically distinguishes weekday/weekend based on current date.
+    Automatically detects current day of week.
+    Supports all 7 days: mon, tue, wed, thu, fri, sat, sun.
     Returns two types of data:
     - ap_points: Signal strength prediction for each AP point
     - smooth_grid: IDW interpolated smooth grid
     
     Args:
         hour (int, default current time): Hour (0-23)
+        day (str, optional): Day name ('mon'/'tue'/.../'sun'). Default: current day.
     """
     if hour < 0 or hour > 23:
         from datetime import datetime
         hour = datetime.now().hour
     
-    return _load_precomputed_heatmap(hour)
+    return _load_precomputed_heatmap(hour, day)
 
 
 @app.get("/predict/signal_strength/buildings")

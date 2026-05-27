@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Pre-compute heatmap data script (supports weekday/weekend distinction)
-Generates 48 heatmap files (24 hours × 2 date types) in one go,
+Pre-compute heatmap data script (supports all 7 days of the week)
+Generates 168 heatmap files (7 days × 24 hours) in one go,
 saves as static JSON files for millisecond API response.
 
 Usage:
@@ -9,10 +9,13 @@ Usage:
 
 Output:
     precomputed/
-        weekday/
-            heatmap_h0.json  ~  heatmap_h23.json   (24 files)
-        weekend/
-            heatmap_h0.json  ~  heatmap_h23.json   (24 files)
+        mon/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
+        tue/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
+        wed/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
+        thu/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
+        fri/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
+        sat/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
+        sun/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
 """
 
 import json
@@ -37,11 +40,15 @@ OUTPUT_DIR = BASE_DIR / 'precomputed'
 
 UAB_bbox = 41.50736, 41.49505, 2.11543, 2.09491  # north, south, east, west
 
+# Day-of-week mapping: 0=Mon, 6=Sun
+DAY_NAMES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+DAY_FULL_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
 # =====================================================================
 # Load model and encoder
 # =====================================================================
 print("=" * 60)
-print("Pre-computing heatmap data for all 24 hours × weekday/weekend")
+print("Pre-computing heatmap data for all 7 days × 24 hours")
 print("=" * 60)
 
 print("\n[1] Loading signal strength model...")
@@ -85,7 +92,7 @@ def encode_building(building_name: str) -> int:
 # =====================================================================
 # Build AP point list
 # =====================================================================
-print("\n[3] Computing signal strength for all APs × 24 hours × 2 day types...")
+print("\n[3] Computing signal strength for all APs × 7 days × 24 hours...")
 
 # First extract basic info for all APs
 ap_points_base = []
@@ -111,18 +118,19 @@ print(f"  Total APs with valid building: {len(ap_points_base)}")
 for ap in ap_points_base:
     ap['building_code'] = encode_building(ap['building'])
 
-# Batch predict all APs × 24 hours × 2 day types
+# Batch predict all APs × 24 hours × 7 days
 all_hours = list(range(24))
-day_types = [('weekday', 0), ('weekend', 1)]
-total_predictions = len(ap_points_base) * len(all_hours) * len(day_types)
+total_predictions = len(ap_points_base) * len(all_hours) * len(DAY_NAMES)
 
 print(f"  Total predictions needed: {total_predictions}")
 print(f"  Predicting...")
 
 start_time = time.time()
 
-        # Build feature matrix for each hour + day type
-for day_type_name, is_weekend in day_types:
+# Build feature matrix for each hour + day of week
+# Must match the 8 features the model was trained on:
+#   building_code, floor, hour, band, day_of_week, is_weekend, day_of_month, month
+for dow_idx, day_name in enumerate(DAY_NAMES):
     for hour in all_hours:
         rows = []
         for ap in ap_points_base:
@@ -131,13 +139,18 @@ for day_type_name, is_weekend in day_types:
                 'floor': ap['floor'],
                 'hour': float(hour),
                 'band': 5.0,  # Fixed to use 5GHz as total signal strength
+                'day_of_week': float(dow_idx),
+                'is_weekend': 1.0 if dow_idx >= 5 else 0.0,
+                'day_of_month': 15.0,  # 使用月中值作为默认
+                'month': 4.0,  # 使用4月（数据集中最常见的月份）
             })
         
         df = pd.DataFrame(rows)
         predictions = signal_model.predict(df)
+
         
         # Write predictions back to ap_points_base
-        key = f'{day_type_name}_h{hour}'
+        key = f'{day_name}_h{hour}'
         for i, ap in enumerate(ap_points_base):
             if 'signal_by_hour' not in ap:
                 ap['signal_by_hour'] = {}
@@ -162,7 +175,7 @@ def dbm_to_quality(dbm: float) -> dict:
         return {"quality": "Very Poor", "bars": 1}
 
 # =====================================================================
-# Generate and save merged heatmap data (one file per hour × day type)
+# Generate and save merged heatmap data (one file per hour × day)
 # =====================================================================
 print("\n[4] Generating merged heatmap data (AP points + smooth grid)...")
 
@@ -217,12 +230,12 @@ legend = {
     "Very Poor": {"min_db": -100, "max_db": -80, "color": "darkred", "bars": 1},
 }
 
-for day_type_name, is_weekend in day_types:
-    day_dir = OUTPUT_DIR / day_type_name
+for dow_idx, day_name in enumerate(DAY_NAMES):
+    day_dir = OUTPUT_DIR / day_name
     os.makedirs(day_dir, exist_ok=True)
     
     for hour in all_hours:
-        key = f'{day_type_name}_h{hour}'
+        key = f'{day_name}_h{hour}'
         
         # --- AP point data ---
         heatmap_points = []
@@ -275,7 +288,9 @@ for day_type_name, is_weekend in day_types:
         result = {
             "type": "heatmap",
             "hour": hour,
-            "day_type": day_type_name,
+            "day_name": day_name,
+            "day_full_name": DAY_FULL_NAMES[dow_idx],
+            "day_of_week": dow_idx,
             "ap_points": {
                 "total": len(heatmap_points),
                 "buildings_count": len(processed_buildings),
@@ -300,7 +315,7 @@ for day_type_name, is_weekend in day_types:
         with open(output_path, 'w') as f:
             json.dump(result, f)
         
-        print(f"  Saved {day_type_name}/heatmap_h{hour}.json "
+        print(f"  Saved {day_name}/heatmap_h{hour}.json "
               f"({len(heatmap_points)} AP points + {len(smooth_points)} grid points)")
 
 # =====================================================================
@@ -309,6 +324,6 @@ for day_type_name, is_weekend in day_types:
 print("\n" + "=" * 60)
 print("Done! All heatmap data pre-computed.")
 print(f"Output directory: {OUTPUT_DIR}")
-print(f"Total files: {len(all_hours) * len(day_types)} "
-      f"({len(day_types)} day types × {len(all_hours)} hours)")
+print(f"Total files: {len(all_hours) * len(DAY_NAMES)} "
+      f"({len(DAY_NAMES)} days × {len(all_hours)} hours)")
 print("=" * 60)

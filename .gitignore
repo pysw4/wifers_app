@@ -48,7 +48,11 @@ app.*.map.json
 *.csv
 cache/
 results/
-# precomputed/  # 取消注释以排除热力图预计算文件
+.venv/
+precomputed/
+
+
+
 
 # Old/unused scripts (replaced by retrain_classifier.py)
 predictor2_0.py

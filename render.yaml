@@ -4,7 +4,8 @@ services:
     name: wifers-app-api
     runtime: python
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT --log-level info"
+    startCommand: "python3 precompute_heatmaps.py && uvicorn main:app --host 0.0.0.0 --port $PORT --log-level info"
+
     plan: free
     healthCheckPath: /health
     envVars:

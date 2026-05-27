@@ -49,6 +49,12 @@ class _MapPageState extends State<MapPage> {
   // Heatmap state — always on, loaded on init
   bool _isLoadingHeatmap = false;
   int _selectedHour = DateTime.now().hour;
+  
+  // Day of week selection: 0=Mon, 6=Sun
+  static const List<String> _dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  static const List<String> _dayApiNames = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  int _selectedDay = DateTime.now().weekday - 1; // DateTime.monday=1 -> our index 0
+  String get _selectedDayApiName => _dayApiNames[_selectedDay];
   final Map<String, Color> _signalColors = {
     'Excellent': const Color(0xFF00E676),  // Bright Green (strongest signal)
     'Good': const Color(0xFF76FF03),       // Light Green
@@ -277,8 +283,8 @@ class _MapPageState extends State<MapPage> {
     });
 
     try {
-      // Build cache key
-      final cacheKey = 'heatmap_$_selectedHour';
+      // Build cache key (include day for 7-day support)
+      final cacheKey = 'heatmap_${_selectedDayApiName}_$_selectedHour';
       const heatmapTtl = Duration(minutes: 30);
 
       // Try cache first
@@ -291,6 +297,7 @@ class _MapPageState extends State<MapPage> {
 
       final data = await _apiService.getSignalHeatmap(
         hour: _selectedHour,
+        day: _selectedDayApiName,
       );
       
       // Save to cache
@@ -777,6 +784,57 @@ class _MapPageState extends State<MapPage> {
     }).toList();
   }
 
+  Widget _buildDaySelector() {
+    return Positioned(
+      bottom: 80,
+      left: 10,
+      right: 10,
+      child: Center(
+        child: Card(
+          elevation: 4,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: List.generate(7, (index) {
+                final isSelected = index == _selectedDay;
+                return Padding(
+                  padding: const EdgeInsets.all(2),
+                  child: GestureDetector(
+                    onTap: () {
+                      if (index != _selectedDay) {
+                        setState(() {
+                          _selectedDay = index;
+                        });
+                        _loadHeatmap();
+                      }
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: isSelected ? Colors.blue : Colors.transparent,
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Text(
+                        _dayNames[index],
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                          color: isSelected ? Colors.white : Colors.black87,
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildHeatmapLegend() {
     if (_smoothHeatmapPoints.isNotEmpty) {
       return Positioned(
@@ -796,7 +854,7 @@ class _MapPageState extends State<MapPage> {
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                 ),
                 Text(
-                  '$_selectedHour:00',
+                  '${_dayNames[_selectedDay]} $_selectedHour:00',
                   style: const TextStyle(fontSize: 11, color: Colors.grey),
                 ),
                 const Divider(height: 8),
@@ -880,6 +938,8 @@ class _MapPageState extends State<MapPage> {
           ),
           // Heatmap legend overlay
           _buildHeatmapLegend(),
+          // Day of week selector
+          _buildDaySelector(),
         ],
       ),
       floatingActionButton: FloatingActionButton(

@@ -1,11 +1,12 @@
 """
-AP Up/Down Classifier Retraining Script
+AP Up/Down Classifier Retraining Script (v2 - 带周几和日期特征)
 ========================================
 Improvements:
 1. Uses all 2.66M data points (previously only 1000)
 2. Uses F1 score (instead of accuracy) to select the best model, addressing class imbalance
 3. Sets class_weight='balanced' to handle Down being only 5.63%
 4. Compares multiple models and outputs confusion matrices
+5. 新增特征: day_of_week, is_weekend, month, day_of_month — 考虑周几和日期，更精确
 """
 
 import pandas as pd
@@ -34,8 +35,9 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(RESULT_DIR, exist_ok=True)
 
 print("=" * 70)
-print("AP Up/Down Classifier Retraining")
-print("Using all 2.66M data points, handling class imbalance")
+print("AP Up/Down Classifier Retraining v2")
+print("Using all data points, handling class imbalance")
+print("新增特征: day_of_week, is_weekend, month, day_of_month")
 print("=" * 70)
 
 # ============================================================
@@ -45,7 +47,7 @@ print("\n[1/6] Loading data...")
 t0 = time.time()
 
 use_cols = ['client_count', 'cpu_utilization', 'mem_free', 'mem_total',
-            'last_modified', 'hour', 'mem_usage', 'overloaded', 'status']
+            'last_modified', 'hour', 'mem_usage', 'overloaded', 'status', 'date']
 df = pd.read_csv('aps_processed.csv', usecols=use_cols, engine='python', on_bad_lines='skip')
 print(f"  Loaded: {len(df)} rows, {time.time()-t0:.1f}s")
 
@@ -65,10 +67,21 @@ print(f"  Up:   {counts.get('Up', 0)} ({100-down_pct:.2f}%)")
 # ============================================================
 print("\n[3/6] Preparing features...")
 
+# 解析日期特征
+print("  Parsing date features...")
+df['date_parsed'] = pd.to_datetime(df['date'], errors='coerce')
+df['day_of_week'] = df['date_parsed'].dt.dayofweek  # 0=Monday, 6=Sunday
+df['is_weekend'] = (df['day_of_week'] >= 5).astype(int)
+df['month'] = df['date_parsed'].dt.month
+df['day_of_month'] = df['date_parsed'].dt.day
+
 y = (df['status'] == 'Up').astype(int).values
 
-feature_cols = ['client_count', 'cpu_utilization', 'mem_free', 'mem_total',
-                'last_modified', 'hour', 'mem_usage', 'overloaded']
+feature_cols = [
+    'client_count', 'cpu_utilization', 'mem_free', 'mem_total',
+    'last_modified', 'hour', 'mem_usage', 'overloaded',
+    'day_of_week', 'is_weekend', 'month', 'day_of_month'
+]
 X = df[feature_cols].copy()
 
 # Ensure all feature columns are numeric
@@ -84,7 +97,7 @@ if null_count > 0:
 X = X.replace([np.inf, -np.inf], np.nan).fillna(X.median())
 print(f"  After cleaning: {len(X)} rows")
 
-print(f"  Features: {feature_cols}")
+print(f"  Features ({len(feature_cols)}): {feature_cols}")
 print(f"  Samples: {len(X)}")
 
 X_train, X_test, y_train, y_test = train_test_split(
@@ -181,7 +194,7 @@ for _, row in results_df.iterrows():
           f"Precision={row['precision_down']:.4f}  "
           f"Recall={row['recall_down']:.4f}")
 
-results_path = os.path.join(RESULT_DIR, "retrain_results.csv")
+results_path = os.path.join(RESULT_DIR, "retrain_results_v2.csv")
 results_df.to_csv(results_path, index=False)
 print(f"\n  Results saved to {results_path}")
 
@@ -212,6 +225,9 @@ meta = {
     'training_date': time.strftime('%Y-%m-%d %H:%M:%S'),
     'class_balanced': True,
     'selection_metric': 'f1_down',
+    'version': 'v2',
+    'features_added': ['day_of_week', 'is_weekend', 'month', 'day_of_month'],
+    'description': '考虑周几和日期的分类器，更精确',
 }
 meta_path = os.path.join(MODEL_DIR, 'decision_tree_meta.json')
 with open(meta_path, 'w') as f:
@@ -222,4 +238,5 @@ print("\n" + "=" * 70)
 print("Retraining complete!")
 print(f"Best model: {best_name}")
 print(f"F1(Down): {best_f1:.4f}")
+print(f"Features: {feature_cols}")
 print("=" * 70)

@@ -75,10 +75,14 @@ class ApiService {
   /// Returns merged data with both AP points and smooth grid.
   /// Parameters:
   ///   [hour] - hour of day (0-23, default: current hour)
-  Future<Map<String, dynamic>> getSignalHeatmap({int? hour}) async {
+  ///   [day] - day of week ('mon'/'tue'/.../'sun', default: current day)
+  Future<Map<String, dynamic>> getSignalHeatmap({int? hour, String? day}) async {
     final params = <String, String>{};
     if (hour != null) {
       params['hour'] = hour.toString();
+    }
+    if (day != null) {
+      params['day'] = day;
     }
     final uri = Uri.parse('$baseUrl/predict/signal_strength/heatmap').replace(queryParameters: params);
     final response = await http.get(uri);
