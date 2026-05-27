@@ -13,7 +13,7 @@ from helper_script import add_aps_to_graph, find_paths_to_candidates, find_quali
 import os
 import json
 import logging
-from collections import OrderedDict
+
 
 
 # Configure logging
@@ -118,10 +118,10 @@ def init_graph(force: bool = False):
     
     # Create subgraph containing only road nodes (integer nodes) for nearest_nodes queries
     # This ensures ox.distance.nearest_nodes never returns AP string nodes
-    # Use subgraph VIEW (no .copy()) to avoid duplicating data in memory
     road_nodes = [n for n in G.nodes() if not isinstance(n, str)]
-    G_road = G.subgraph(road_nodes)  # View, not copy — saves ~80MB RAM
-    logger.info(f"Created road subgraph view with {len(G_road.nodes())} nodes")
+    G_road = G.subgraph(road_nodes).copy()
+    logger.info(f"Created road subgraph with {len(G_road.nodes())} nodes")
+
 
     
     logger.info("Adding AP nodes to graph...")
@@ -828,46 +828,90 @@ def list_available_buildings():
 
 
 
-# Trend data cache: {ap_name: {hour: data}}
-# Built on-demand per AP query, not pre-loaded for all APs (saves ~80MB RAM)
-TREND_CACHE_TTL = 300  # 5 minute cache
+# AP trend index: {ap_name: {hour: {signal_db, signal_quality, bars}}}
+# Built once from the merged heatmap, refreshed on day change
+_ap_trend_index: dict = {}
+_ap_trend_day: str = None
 
 
-def _get_ap_trend_data(ap_name: str, day_name: str = None) -> list:
-    """Get 24-hour trend data for a specific AP from the merged heatmap.
+def _build_ap_trend_index(day_name: str = None) -> dict:
+    """Build AP trend index from the merged heatmap file.
     
-    Reads from the in-memory merged file (1 file per day, loaded once).
-    Night hours (0-6) use h3 representative data.
-    Much faster than reading 24 separate files.
+    Iterates over all 18 hourly slots (1 night rep + 17 day hours)
+    and indexes by AP name for O(1) trend queries.
     """
     if day_name is None:
         day_name = _get_day_name()
     
+    merged = _load_merged_heatmap(day_name)
+    index = {}
+    
+    # Night representative
+    night_data = merged.get("night", {}).get("data", {})
+    night_points = night_data.get("ap_points", {}).get("points", [])
+    for point in night_points:
+        ap_name = point.get("ap_name")
+        if ap_name:
+            if ap_name not in index:
+                index[ap_name] = {}
+            for h in NIGHT_HOURS:
+                index[ap_name][h] = {
+                    "signal_db": point["signal_db"],
+                    "signal_quality": point["signal_quality"],
+                    "bars": point["bars"],
+                }
+    
+    # Day hours
+    for hour_str, hour_data in merged.get("hours", {}).items():
+        hour = int(hour_str)
+        points = hour_data.get("ap_points", {}).get("points", [])
+        for point in points:
+            ap_name = point.get("ap_name")
+            if ap_name:
+                if ap_name not in index:
+                    index[ap_name] = {}
+                index[ap_name][hour] = {
+                    "signal_db": point["signal_db"],
+                    "signal_quality": point["signal_quality"],
+                    "bars": point["bars"],
+                }
+    
+    return index
+
+
+def _get_ap_trend_index(day_name: str = None) -> dict:
+    """Get AP trend index, rebuilt on day change."""
+    global _ap_trend_index, _ap_trend_day
+    if day_name is None:
+        day_name = _get_day_name()
+    
+    if not _ap_trend_index or _ap_trend_day != day_name:
+        _ap_trend_index = _build_ap_trend_index(day_name)
+        _ap_trend_day = day_name
+        logger.info(f"Built AP trend index for {day_name} ({len(_ap_trend_index)} APs)")
+    
+    return _ap_trend_index
+
+
+def _get_ap_trend_data(ap_name: str, day_name: str = None) -> list:
+    """Get 24-hour trend data for a specific AP from the pre-built index.
+    
+    O(1) lookup from the in-memory index. Night hours (0-6) use h3 representative data.
+    """
+    if day_name is None:
+        day_name = _get_day_name()
+    
+    index = _get_ap_trend_index(day_name)
+    ap_data = index.get(ap_name, {})
+    
     trend_data = []
     for hour in range(24):
-        try:
-            data = _get_hourly_data(hour, day_name)
-            ap_points = data.get("ap_points", {})
-            points = ap_points.get("points", [])
-            found = False
-            for point in points:
-                if point.get("ap_name") == ap_name:
-                    trend_data.append({
-                        "hour": hour,
-                        "signal_db": point["signal_db"],
-                        "signal_quality": point["signal_quality"],
-                        "bars": point["bars"],
-                    })
-                    found = True
-                    break
-            if not found:
-                trend_data.append({
-                    "hour": hour,
-                    "signal_db": None,
-                    "signal_quality": None,
-                    "bars": None,
-                })
-        except Exception:
+        if hour in ap_data:
+            trend_data.append({
+                "hour": hour,
+                **ap_data[hour],
+            })
+        else:
             trend_data.append({
                 "hour": hour,
                 "signal_db": None,
@@ -875,6 +919,7 @@ def _get_ap_trend_data(ap_name: str, day_name: str = None) -> list:
                 "bars": None,
             })
     return trend_data
+
 
 
 
