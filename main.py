@@ -202,29 +202,11 @@ def load_ml_model(force: bool = False):
 
 
 def _build_feature_dataframe(features: dict) -> pd.DataFrame:
-    missing_features = [feat for feat in MODEL_FEATURES if feat not in features]
-    if missing_features:
-        raise HTTPException(status_code=422, detail=f"Missing required feature(s): {', '.join(missing_features)}")
-
-    converted = []
-    for feat in MODEL_FEATURES:
-        value = features[feat]
-        if isinstance(value, bool):
-            converted.append(int(value))
-            continue
-        if isinstance(value, (int, float)):
-            converted.append(float(value))
-            continue
-        if isinstance(value, str):
-            try:
-                converted.append(float(value))
-                continue
-            except ValueError:
-                raise HTTPException(status_code=422, detail=f"Invalid feature value for '{feat}': cannot convert '{value}' to float")
-        raise HTTPException(status_code=422, detail=f"Invalid feature type for '{feat}': {type(value).__name__}")
-
-    return pd.DataFrame([converted], columns=MODEL_FEATURES)
-
+    """Build DataFrame from feature dict."""
+    missing = [f for f in MODEL_FEATURES if f not in features]
+    if missing:
+        raise HTTPException(422, f'Missing: {missing}')
+    return pd.DataFrame([[float(int(v) if isinstance(v, bool) else v) for v in features.values() if v is not None]], columns=MODEL_FEATURES)
 
 def _to_prediction_label(prediction) -> str:
     """Convert model prediction to 'Up' / 'Down' string.
@@ -239,23 +221,8 @@ def _to_prediction_label(prediction) -> str:
 
 
 def _up_probability_from_proba(proba: np.ndarray) -> float:
-    """Estimate AP signal strength from predicted Up probability."""
-    if hasattr(ml_model, 'classes_'):
-        try:
-            classes = list(ml_model.classes_)
-            # Compatible with integer labels [0, 1] and string labels ['Down', 'Up']
-            for up_label in [1, 'Up', 'up']:
-                if up_label in classes:
-                    return float(proba[classes.index(up_label)])
-        except Exception:
-            pass
-    if proba.shape[-1] == 2:
-            # Use the probability of the positive class when class labels are unknown.
-        # proba[1] is typically the positive class probability
-        return float(proba[1])
-    return float(proba[-1])
-
-
+    """Return probability of 'Up' class (always proba[1])."""
+    return float(proba[1]) if proba.shape[-1] == 2 else float(proba[-1])
 @app.get("/")
 def root():
     return {
@@ -530,86 +497,6 @@ def route(lat: float, lng: float, dest_lat: float, dest_lng: float):
         logger.error(f"Route error: {e}", exc_info=True)
         return {"path": [], "message": f"Routing error: {str(e)}"}
 
-
-def _resolve_to_road_node(G, node_id, lat=None, lng=None):
-    """
-    If node_id is an AP node (string type), find its nearest OSM road node.
-    OSM road nodes are integer type.
-    
-    Uses Euclidean distance to manually find the nearest road node,
-    avoiding compatibility issues with ox.distance.nearest_nodes.
-    """
-    # If node is already an integer (OSM road node), return directly
-    # Compatible with numpy integer types (numpy.int64, numpy.int32, etc.)
-    if isinstance(node_id, (int, np.integer)):
-        return int(node_id)
-    
-    # If it's a string node (AP or indoor node), find nearest OSM road node
-    logger.info(f"Node '{node_id}' is a string node, finding nearest road node")
-    
-    # Get node coordinates
-    if node_id in G:
-        node_lat = G.nodes[node_id].get('y', lat)
-        node_lng = G.nodes[node_id].get('x', lng)
-    else:
-        node_lat = lat
-        node_lng = lng
-    
-    if node_lat is None or node_lng is None:
-        logger.warning(f"Node '{node_id}' has no coordinates, cannot resolve")
-        return node_id
-    
-    # Collect all road nodes
-    # Note: OSM node IDs may be numpy.int64 or Python int type
-    # Use lenient check: exclude string types to identify road nodes
-    road_nodes = []
-    for n in G.nodes():
-        if isinstance(n, str):
-            continue  # Skip AP nodes and indoor nodes
-        try:
-            int(n)  # If it can be converted to int, it's a road node
-            road_nodes.append(n)
-        except (ValueError, TypeError):
-            continue
-    
-    if not road_nodes:
-        logger.warning(f"No road nodes found in graph! Total nodes: {len(G.nodes())}")
-        # Debug: print first 10 node types
-        for i, n in enumerate(G.nodes()):
-            if i >= 10:
-                break
-            logger.warning(f"  Node sample: {n} (type={type(n).__name__})")
-        return node_id
-    
-    logger.info(f"Searching among {len(road_nodes)} road nodes for nearest to ({node_lat}, {node_lng})")
-    
-    # Manually calculate Euclidean distance to find nearest road node
-    try:
-        import math
-        best_node = None
-        best_dist = float('inf')
-        for rn in road_nodes:
-            try:
-                # OSM nodes may use 'y'/'x' or 'lat'/'lon' keys
-                rn_lat = G.nodes[rn].get('y', G.nodes[rn].get('lat', None))
-                rn_lng = G.nodes[rn].get('x', G.nodes[rn].get('lon', None))
-                if rn_lat is None or rn_lng is None:
-                    continue
-                dist = (rn_lat - node_lat)**2 + (rn_lng - node_lng)**2
-                if dist < best_dist:
-                    best_dist = dist
-                    best_node = rn
-            except Exception:
-                continue
-        if best_node is not None:
-            best_node = int(best_node)
-            logger.info(f"Resolved '{node_id}' -> road node {best_node} (euclidean dist={math.sqrt(best_dist):.6f})")
-            return best_node
-    except Exception as e:
-        logger.warning(f"Manual road node search failed: {e}")
-    
-    logger.warning(f"Failed to resolve '{node_id}' to any road node")
-    return node_id
 
 
 @app.get("/route/advanced/{lat}/{lng}/{dest_lat}/{dest_lng}")
