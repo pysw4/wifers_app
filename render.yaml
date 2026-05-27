@@ -5,7 +5,6 @@ services:
     runtime: python
     buildCommand: "pip install -r requirements.txt"
     startCommand: "uvicorn main:app --host 0.0.0.0 --port $PORT --log-level info"
-
     plan: free
     healthCheckPath: /health
     envVars:
@@ -25,13 +24,10 @@ services:
         - web
         - build
 
-  # ---- Flutter Web Frontend (Docker) ----
+  # ---- Flutter Web Frontend (Static Site) ----
   - type: web
     name: wifers-app-web
-    runtime: image
-    dockerfilePath: Dockerfile
+    runtime: static
+    buildCommand: "flutter pub get && flutter build web --release"
+    publishDir: build/web
     plan: free
-    healthCheckPath: /
-    envVars:
-      - key: FLUTTER_WEB_BASE_HREF
-        value: /
