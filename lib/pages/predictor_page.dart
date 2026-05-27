@@ -49,6 +49,26 @@ class _PredictorPageState extends State<PredictorPage> {
     _overloaded = false;
   }
 
+  Map<String, dynamic> _buildFeatures() {
+    final now = DateTime.now();
+    final weekday = now.weekday; // 1=Mon, 7=Sun
+    return {
+      'client_count': int.parse(_clientCountController.text),
+      'cpu_utilization': double.parse(_cpuUtilizationController.text),
+      'mem_free': double.parse(_memFreeController.text),
+      'mem_total': double.parse(_memTotalController.text),
+      'last_modified': double.parse(_lastModifiedController.text),
+      'hour': double.parse(_hourController.text),
+      'mem_usage': double.parse(_memUsageController.text),
+      'overloaded': _overloaded ? 1 : 0,
+      'day_of_week': weekday - 1,  // 0=Mon, 6=Sun
+      'is_weekend': (weekday >= 6) ? 1 : 0,
+      'month': now.month,
+      'day_of_month': now.day,
+    };
+  }
+
+
   @override
   void dispose() {
     _clientCountController.dispose();
@@ -70,18 +90,9 @@ class _PredictorPageState extends State<PredictorPage> {
     });
 
     try {
-      final features = {
-        'client_count': int.parse(_clientCountController.text),
-        'cpu_utilization': double.parse(_cpuUtilizationController.text),
-        'mem_free': double.parse(_memFreeController.text),
-        'mem_total': double.parse(_memTotalController.text),
-        'last_modified': double.parse(_lastModifiedController.text),
-        'hour': double.parse(_hourController.text),
-        'mem_usage': double.parse(_memUsageController.text),
-        'overloaded': _overloaded ? 1 : 0,
-      };
-
+      final features = _buildFeatures();
       final result = await _apiService.predictAPStatus(features);
+
       setState(() {
         _predictionResult = result;
       });

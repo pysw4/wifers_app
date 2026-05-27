@@ -41,10 +41,12 @@ async def lifespan(app: FastAPI):
             logger.warning("Graph routing will be unavailable until graph is loaded")
             _initialized = False
         
-        # 3. Preload current day's merged heatmap (lightweight, ~30-50MB)
+        # 3. Preload current hour's heatmap (lightweight, ~1-2MB)
         try:
-            _load_merged_heatmap()
-            logger.info(f"Preloaded merged heatmap for {_merged_heatmap_day}")
+            from datetime import datetime
+            current_hour = datetime.now().hour
+            _load_hourly_file(current_hour)
+            logger.info(f"Preloaded heatmap for hour {current_hour}")
         except Exception as e:
             logger.warning(f"Failed to preload heatmap: {e}")
 
@@ -242,32 +244,8 @@ async def full_status():
     }
 
 
-@app.post("/predict/batch")
-def predict_ap_status_batch(items: list[dict]):
-    if not ml_model:
-        raise HTTPException(status_code=503, detail="ML model not loaded yet")
-    if not items:
-        raise HTTPException(status_code=422, detail="No candidate items provided for batch prediction.")
-
-    predictions = []
-    for item in items:
-        features = item.get('features') if isinstance(item, dict) and 'features' in item else item
-        df = _build_feature_dataframe(features)
-        prediction = ml_model.predict(df)[0]
-        probability = ml_model.predict_proba(df)[0]
-        up_prob = _up_probability_from_proba(probability)
-        predictions.append({
-            'input': features,
-            'prediction': _to_prediction_label(prediction),
-            'confidence': round(float(max(probability)), 3),
-            'up_probability': round(up_prob * 100, 1),
-            'score': round(float(np.max(probability)), 3)
-        })
-
-    return {'predictions': predictions, 'count': len(predictions)}
-
-
 @app.post("/recommend")
+
 def recommend_aps(body: dict):
     """
     Fast AP recommendation using graph + heatmap cache + ML model.
@@ -715,7 +693,7 @@ def predict_ap_status(features: dict):
 
 # ---- Signal Strength Prediction Endpoints ----
 # Predicts REAL signal strength (dBm) based on building, floor, hour, and day of week
-# Uses precomputed merged heatmap files (one per day) for instant response
+# Uses individual precomputed heatmap files (one per hour per day) for instant response
 # Night hours (0-6) use h3 as representative to save memory
 
 PRECOMPUTED_DIR = BASE_DIR / 'precomputed'
@@ -727,10 +705,11 @@ DAY_NAMES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 NIGHT_HOURS = list(range(0, 7))
 NIGHT_REPRESENTATIVE = 3
 
-# In-memory cache: stores the merged file for the current day
-# Only 1 file loaded at a time (~30-50MB), refreshed on day change
-_merged_heatmap: dict = None
-_merged_heatmap_day: str = None
+# Simple LRU cache: stores the most recently read hourly file
+# Each file is ~1-2MB, keeps at most 3 files in memory
+_hourly_cache: dict = {}  # {cache_key: data}
+_hourly_cache_keys: list = []  # ordered keys for LRU eviction
+_HOURLY_CACHE_MAX = 3
 
 
 def _get_day_name() -> str:
@@ -740,63 +719,72 @@ def _get_day_name() -> str:
     return DAY_NAMES[today.weekday()]
 
 
-def _load_merged_heatmap(day_name: str = None) -> dict:
-    """Load the merged heatmap file for a given day.
+def _load_hourly_file(hour: int, day_name: str = None) -> dict:
+    """Load a single hourly heatmap file from precomputed/{day_name}/heatmap_h{hour}.json.
     
-    Only loads one file at a time (current day), refreshed automatically on day change.
-    Night hours (0-6) are served from the 'night' section (h3 representative).
+    Uses a small LRU cache (max 3 files) to avoid repeated disk I/O.
+    Night hours (0-6) are mapped to the representative hour (h3).
     """
-    global _merged_heatmap, _merged_heatmap_day
+    global _hourly_cache, _hourly_cache_keys
     if day_name is None:
         day_name = _get_day_name()
     
-    if _merged_heatmap is None or _merged_heatmap_day != day_name:
-        filepath = PRECOMPUTED_DIR / f'{day_name}.json'
-        if not filepath.exists():
-            raise HTTPException(status_code=500, detail=f"Precomputed heatmap not found for {day_name}")
-        with open(filepath) as f:
-            _merged_heatmap = json.load(f)
-        _merged_heatmap_day = day_name
-        logger.info(f"Loaded merged heatmap for {day_name} ({len(_merged_heatmap.get('hours', {}))} day hours + night rep)")
+    # Night hours use representative h3
+    actual_hour = NIGHT_REPRESENTATIVE if hour in NIGHT_HOURS else hour
     
-    return _merged_heatmap
+    cache_key = f"{day_name}_{actual_hour}"
+    
+    # Check cache
+    if cache_key in _hourly_cache:
+        # Move to end (most recently used)
+        _hourly_cache_keys.remove(cache_key)
+        _hourly_cache_keys.append(cache_key)
+        data = _hourly_cache[cache_key]
+        # Tag with requested hour info
+        return {
+            **data,
+            "hour": hour,
+            "is_night_representative": hour in NIGHT_HOURS,
+            "representative_hour": NIGHT_REPRESENTATIVE if hour in NIGHT_HOURS else None,
+        }
+    
+    # Load from disk
+    filepath = PRECOMPUTED_DIR / day_name / f'heatmap_h{actual_hour}.json'
+    if not filepath.exists():
+        raise HTTPException(status_code=500, detail=f"Precomputed heatmap not found: {filepath}")
+    
+    with open(filepath) as f:
+        data = json.load(f)
+    
+    # Update cache (LRU eviction)
+    _hourly_cache[cache_key] = data
+    _hourly_cache_keys.append(cache_key)
+    if len(_hourly_cache_keys) > _HOURLY_CACHE_MAX:
+        oldest_key = _hourly_cache_keys.pop(0)
+        del _hourly_cache[oldest_key]
+    
+    logger.info(f"Loaded heatmap: {filepath}")
+    
+    return {
+        **data,
+        "hour": hour,
+        "is_night_representative": hour in NIGHT_HOURS,
+        "representative_hour": NIGHT_REPRESENTATIVE if hour in NIGHT_HOURS else None,
+    }
 
 
 def _get_hourly_data(hour: int, day_name: str = None) -> dict:
-    """Get heatmap data for a specific hour from the merged file.
+    """Get heatmap data for a specific hour.
     
     Night hours (0-6) are mapped to the representative hour (h3).
-    Day hours (7-23) are read directly from the 'hours' section.
     """
-    merged = _load_merged_heatmap(day_name)
-    
-    if hour in NIGHT_HOURS:
-        # Night: return representative data with original hour info
-        data = merged.get("night", {}).get("data", {})
-        return {
-            **data,
-            "hour": hour,
-            "is_night_representative": True,
-            "representative_hour": NIGHT_REPRESENTATIVE,
-        }
-    else:
-        # Day: return specific hour data
-        data = merged.get("hours", {}).get(str(hour))
-        if data is None:
-            raise HTTPException(status_code=500, detail=f"Hour {hour} not found in merged heatmap for {merged.get('day_name', 'unknown')}")
-        return {
-            **data,
-            "hour": hour,
-            "is_night_representative": False,
-        }
-
-
+    return _load_hourly_file(hour, day_name)
 
 
 @app.get("/predict/signal_strength/heatmap")
 def get_signal_heatmap(hour: int = -1, day: str = None):
     """
-    Get heatmap data (read from merged precomputed file, millisecond response)
+    Get heatmap data (read from individual hourly files, millisecond response)
     
     Automatically detects current day of week.
     Supports all 7 days: mon, tue, wed, thu, fri, sat, sun.
@@ -816,54 +804,49 @@ def get_signal_heatmap(hour: int = -1, day: str = None):
     return _get_hourly_data(hour, day)
 
 
-@app.get("/predict/signal_strength/buildings")
-def list_available_buildings():
-    """List all available buildings (extracted from precomputed data)"""
-    data = _get_hourly_data(0)
-    ap_points = data.get("ap_points", {})
-    return {
-        "buildings": ap_points.get("buildings", []),
-        "count": ap_points.get("buildings_count", 0),
-    }
-
-
-
 # AP trend index: {ap_name: {hour: {signal_db, signal_quality, bars}}}
-# Built once from the merged heatmap, refreshed on day change
+
+# Built once from the individual hourly files, refreshed on day change
 _ap_trend_index: dict = {}
 _ap_trend_day: str = None
 
 
 def _build_ap_trend_index(day_name: str = None) -> dict:
-    """Build AP trend index from the merged heatmap file.
+    """Build AP trend index from individual hourly heatmap files.
     
-    Iterates over all 18 hourly slots (1 night rep + 17 day hours)
+    Iterates over all 24 hourly files (night hours use h3 representative)
     and indexes by AP name for O(1) trend queries.
     """
     if day_name is None:
         day_name = _get_day_name()
     
-    merged = _load_merged_heatmap(day_name)
     index = {}
     
-    # Night representative
-    night_data = merged.get("night", {}).get("data", {})
-    night_points = night_data.get("ap_points", {}).get("points", [])
-    for point in night_points:
-        ap_name = point.get("ap_name")
-        if ap_name:
-            if ap_name not in index:
-                index[ap_name] = {}
-            for h in NIGHT_HOURS:
-                index[ap_name][h] = {
-                    "signal_db": point["signal_db"],
-                    "signal_quality": point["signal_quality"],
-                    "bars": point["bars"],
-                }
+    # Night representative (h3)
+    night_filepath = PRECOMPUTED_DIR / day_name / f'heatmap_h{NIGHT_REPRESENTATIVE}.json'
+    if night_filepath.exists():
+        with open(night_filepath) as f:
+            night_data = json.load(f)
+        night_points = night_data.get("ap_points", {}).get("points", [])
+        for point in night_points:
+            ap_name = point.get("ap_name")
+            if ap_name:
+                if ap_name not in index:
+                    index[ap_name] = {}
+                for h in NIGHT_HOURS:
+                    index[ap_name][h] = {
+                        "signal_db": point["signal_db"],
+                        "signal_quality": point["signal_quality"],
+                        "bars": point["bars"],
+                    }
     
-    # Day hours
-    for hour_str, hour_data in merged.get("hours", {}).items():
-        hour = int(hour_str)
+    # Day hours (7-23)
+    for hour in range(7, 24):
+        filepath = PRECOMPUTED_DIR / day_name / f'heatmap_h{hour}.json'
+        if not filepath.exists():
+            continue
+        with open(filepath) as f:
+            hour_data = json.load(f)
         points = hour_data.get("ap_points", {}).get("points", [])
         for point in points:
             ap_name = point.get("ap_name")
@@ -957,60 +940,8 @@ def get_ap_daily_trend(ap_name: str):
     }
 
 
-@app.get("/predict/signal_strength/ap_trend/{ap_name}/compare")
-def get_ap_trend_compare(ap_name: str):
-    """
-    Compare signal strength trends for a specific AP between weekday and weekend.
-    """
-    from urllib.parse import unquote
-    ap_name = unquote(ap_name)
-    
-    results = {}
-    for day_type in ['weekday', 'weekend']:
-        trend_data = _get_ap_trend_data(ap_name, day_type)
-        
-        valid_signals = [d["signal_db"] for d in trend_data if d["signal_db"] is not None]
-        stats = {}
-        if valid_signals:
-            stats = {
-                "avg_db": round(sum(valid_signals) / len(valid_signals), 1),
-                "max_db": max(valid_signals),
-                "min_db": min(valid_signals),
-            }
-        
-        results[day_type] = {
-            "trend": trend_data,
-            "stats": stats,
-        }
-    
-    return {
-        "ap_name": ap_name,
-        "weekday": results["weekday"],
-        "weekend": results["weekend"],
-    }
-
-
-
-@app.get("/cache/status")
-def cache_status():
-    """View cache status"""
-    return {
-        "merged_heatmap": {
-            "loaded": _merged_heatmap is not None,
-            "current_day": _merged_heatmap_day,
-            "day_hours": sorted(_merged_heatmap.get("hours", {}).keys()) if _merged_heatmap else [],
-            "night_representative": NIGHT_REPRESENTATIVE,
-            "night_hours": NIGHT_HOURS,
-        },
-        "precomputed_files": {
-            "format": "merged (one file per day)",
-            "directory": str(PRECOMPUTED_DIR),
-        }
-    }
-
-
-
 if __name__ == "__main__":
+
     import uvicorn
     # Run with more workers for production
     uvicorn.run(app, host="0.0.0.0", port=8000)

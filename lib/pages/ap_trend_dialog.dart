@@ -23,8 +23,29 @@ class _APTrendDialogState extends State<APTrendDialog> {
   String? _error;
   List<Map<String, dynamic>> _trendData = [];
   String _dayType = 'weekday';
+  String _dayLabel = 'Weekday';
   Map<String, dynamic> _stats = {};
   bool _showBars = true; // Toggle line chart / bar chart
+
+  /// Map backend day names ('mon'/'tue'/.../'sun') to display labels
+  static const Map<String, String> _dayLabels = {
+    'mon': 'Monday',
+    'tue': 'Tuesday',
+    'wed': 'Wednesday',
+    'thu': 'Thursday',
+    'fri': 'Friday',
+    'sat': 'Saturday',
+    'sun': 'Sunday',
+  };
+
+  static const Set<String> _weekendDays = {'sat', 'sun'};
+
+  String _formatDayType(String dayName) {
+    final label = _dayLabels[dayName] ?? 'Weekday';
+    final isWeekend = _weekendDays.contains(dayName);
+    return '$label (${isWeekend ? 'Weekend' : 'Weekday'})';
+  }
+
 
   @override
   void initState() {
@@ -40,10 +61,13 @@ class _APTrendDialogState extends State<APTrendDialog> {
           .toList();
       setState(() {
         _trendData = trend;
-        _dayType = data['day_type'] as String? ?? 'weekday';
+        final rawDayType = data['day_type'] as String? ?? 'weekday';
+        _dayType = rawDayType;
+        _dayLabel = _formatDayType(rawDayType);
         _stats = data['stats'] as Map<String, dynamic>? ?? {};
         _isLoading = false;
       });
+
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -117,7 +141,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    _dayType == 'weekend' ? 'Weekend' : 'Weekday',
+                    _dayLabel,
                     style: TextStyle(
                       fontSize: 11,
                       color: _dayType == 'weekend' ? Colors.orange[800] : Colors.blue[800],
@@ -125,6 +149,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
                     ),
                   ),
                 ),
+
               ],
             ),
             const SizedBox(height: 6),

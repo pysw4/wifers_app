@@ -38,21 +38,8 @@ class ApiService {
     }
   }
 
-  Future<Map<String, dynamic>> predictAPStatusBatch(List<Map<String, dynamic>> items) async {
-    final uri = Uri.parse('$baseUrl/predict/batch');
-    final response = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(items),
-    );
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('Request failed, status code: ${response.statusCode}');
-    }
-  }
-
   /// Advanced route with alternatives using find_paths_to_candidates
+
   /// Returns best path and alternative routes within acceptable range
   Future<Map<String, dynamic>> fetchAdvancedRoute(
     double lng,
