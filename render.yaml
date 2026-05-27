@@ -30,4 +30,3 @@ services:
     runtime: static
     buildCommand: "flutter pub get && flutter build web --release && cp -r web/heatmaps build/web/heatmaps"
     staticPublishPath: build/web
-    plan: free

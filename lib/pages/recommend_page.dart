@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:latlong2/latlong.dart';
-import 'package:wifers_app/services/api_service.dart';
+import 'package:wifers_app/services/api_service.dart' show ApiService, ApiException;
 import 'package:wifers_app/services/ap_data_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
@@ -124,6 +124,20 @@ class RecommendPageState extends State<RecommendPage> {
       await CacheService.set(ck, jsonEncode(recs.map((a) => {'id':a.id,'name':a.name,'building':a.building,'floor':a.floor,'lat':a.lat,'lng':a.lng,'distance':a.distance,'prediction':a.prediction,'confidence':a.confidence,'score':a.score,'signal_db':a.signalDb,'signal_quality':a.signalQuality,'bars':a.bars,'up_probability':a.upProbability}).toList()));
       setState(() { _results = recs; _status = 'Top ${recs.length} recommendations ($_modeLabel).'; });
     } catch (e) {
+      if (e is ApiException && e.statusCode == 422 && mounted) {
+        final errors = e.details?['errors'] as List? ?? [];
+        final errorMessages = errors.isNotEmpty
+            ? errors.map((err) => '• ${err['field']}: ${err['message']}').join('\n')
+            : e.message;
+        await showDialog(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: const Row(children: [Icon(Icons.warning_amber_rounded, color: Colors.orange), SizedBox(width: 8), Text('Invalid Input')]),
+            content: SingleChildScrollView(child: Text(errorMessages)),
+            actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('OK'))],
+          ),
+        );
+      }
       setState(() { _status = 'Failed: $e'; });
     } finally {
       setState(() { _loading = false; });

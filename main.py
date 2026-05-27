@@ -27,9 +27,10 @@ import joblib
 import pandas as pd
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 BASE_DIR = Path(__file__).resolve().parent
 MODELS_DIR = BASE_DIR / "models"
@@ -270,6 +271,46 @@ class RecommendRequest(BaseModel):
     mode: str = Field(default="balanced", pattern="^(distance|signal|balanced)$")
     building: str = Field(default="")
     prefer_stable: bool = Field(default=True)
+
+    @field_validator('lat')
+    @classmethod
+    def validate_lat(cls, v):
+        if v < -90 or v > 90:
+            raise ValueError('Latitude must be between -90 and 90')
+        return v
+
+    @field_validator('lng')
+    @classmethod
+    def validate_lng(cls, v):
+        if v < -180 or v > 180:
+            raise ValueError('Longitude must be between -180 and 180')
+        return v
+
+    @field_validator('building')
+    @classmethod
+    def validate_building(cls, v):
+        if len(v) > 100:
+            raise ValueError('Building name too long (max 100 characters)')
+        return v
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc):
+    errors = []
+    for error in exc.errors():
+        errors.append({
+            "field": " -> ".join(str(loc) for loc in error["loc"]),
+            "message": error["msg"],
+            "type": error["type"],
+        })
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": "Input validation failed",
+            "errors": errors,
+            "model_version": "v3"
+        }
+    )
 
 
 @app.get("/health")

@@ -2,6 +2,17 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
+class ApiException implements Exception {
+  final int statusCode;
+  final String message;
+  final Map<String, dynamic>? details;
+
+  ApiException(this.statusCode, this.message, {this.details});
+
+  @override
+  String toString() => message;
+}
+
 class ApiService {
   static const String baseUrl = 'https://wifers-app-api.onrender.com';
 
@@ -19,6 +30,14 @@ class ApiService {
       body: jsonEncode(body),
     );
     if (response.statusCode == 200) return jsonDecode(response.body);
+    if (response.statusCode == 422) {
+      final detail = jsonDecode(response.body);
+      throw ApiException(
+        422,
+        detail['detail'] ?? 'Input validation failed',
+        details: detail,
+      );
+    }
     throw Exception('${response.statusCode} $path');
   }
 
