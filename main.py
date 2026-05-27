@@ -162,15 +162,16 @@ app.add_middleware(
 # Model-loading helpers
 # ---------------------------------------------------------------------------
 def load_ml_model(force: bool = False):
-    """Load the Decision Tree model (idempotent)."""
+    """Load the Decision Tree model (idempotent).
+
+    Only loads ``decision_tree.joblib`` — other ``.joblib`` files
+    (signal_strength_model, building_encoder) are ignored.
+    """
     global ml_model, model_path
     if ml_model is not None and not force:
         return ml_model, model_path
 
     candidates: list[Path] = [PRIMARY_MODEL_PATH, FALLBACK_MODEL_PATH]
-    model_dir = BASE_DIR / "models"
-    if model_dir.exists() and not any(c.exists() for c in candidates):
-        candidates.extend(sorted(model_dir.glob("*.joblib")))
 
     for candidate in candidates:
         if candidate.exists():
@@ -477,13 +478,18 @@ def recommend_aps(body: dict):
 
     try:
         # 1. Nearest road node
-        source_node = int(ox.distance.nearest_nodes(G_road, lng, lat))
+        nearest = ox.distance.nearest_nodes(G_road, lng, lat)
+        if nearest is None:
+            print(f"[RECOMMEND] 1️⃣ ❌ nearest_nodes returned None (user outside UAB?)")
+            return {"recommendations": [], "message": "Location is outside the UAB campus area"}
+        source_node = int(nearest)
         print(f"[RECOMMEND] 1️⃣ nearest_nodes → source_node={source_node}")
         logger.info("Recommend: user=(%.5f, %.5f) → source_node=%d", lat, lng, source_node)
 
-        # 2. Qualified nodes within radius (single-source Dijkstra → reuse distances below)
-        qualified = find_qualified_in_range(G, source_node, acceptable_range=radius)
-        print(f"[RECOMMEND] 2️⃣ qualified nodes: {len(qualified)}")
+        # 2. Single-source Dijkstra: get all reachable nodes + distances in one pass
+        distances, paths = nx.single_source_dijkstra(G, source_node, weight="length", cutoff=radius)
+        qualified = list(paths.keys())
+        print(f"[RECOMMEND] 2️⃣ qualified nodes (single Dijkstra): {len(qualified)}")
         if not qualified:
             return {"recommendations": [], "message": f"No reachable nodes within {radius}m"}
 
@@ -499,11 +505,7 @@ def recommend_aps(body: dict):
                 continue
             valid_qualified.append(node)
             qualified_coords.append([cy, cx])  # KD-Tree uses (lat, lng)
-            try:
-                d = nx.dijkstra_path_length(G, source=source_node, target=node, weight="length")
-            except (nx.NetworkXNoPath, Exception):
-                d = radius
-            candidate_distances[node] = d
+            candidate_distances[node] = distances[node]
 
         print(f"[RECOMMEND] 2b️⃣ valid_qualified: {len(valid_qualified)}")
         if not valid_qualified:
