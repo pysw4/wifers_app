@@ -218,15 +218,21 @@ def _dbm_to_quality(dbm: float) -> dict:
 # =====================================================================
 
 class PredictRequest(BaseModel):
-    model_config = {"extra": "ignore"}  # Ignore extra fields from Flutter (client_count, cpu_utilization, etc.)
-    building_code: float = Field(default=0, description="Encoded building identifier")
-    floor: float = Field(default=0, description="Floor number")
+    """Predict request - accepts all fields from Flutter, extracts known ones for model inference."""
+    model_config = {"extra": "ignore"}
+    # Fields that Flutter sends (predictor_page.dart _buildFeatures)
+    client_count: float = Field(default=10, description="Number of connected clients")
+    cpu_utilization: float = Field(default=50.0, description="CPU utilization percentage")
+    mem_free: float = Field(default=1000.0, description="Free memory bytes")
+    mem_total: float = Field(default=2000.0, description="Total memory bytes")
+    last_modified: float = Field(default=1640995200.0, description="Last modified unix timestamp")
     hour: float = Field(default=12, description="Hour of day (0-23)")
-    band: float = Field(default=5.0, description="Frequency band (2.4 or 5 GHz)")
+    mem_usage: float = Field(default=50.0, description="Memory usage percentage")
+    overloaded: int = Field(default=0, description="Overloaded flag (0 or 1)")
     day_of_week: float = Field(default=0, description="Day of week (0=Mon, 6=Sun)")
     is_weekend: float = Field(default=0, description="Is weekend (0 or 1)")
-    day_of_month: float = Field(default=15, description="Day of month")
     month: float = Field(default=4, description="Month (1-12)")
+    day_of_month: float = Field(default=15, description="Day of month")
 
 
 class RecommendRequest(BaseModel):
@@ -262,31 +268,42 @@ async def predict_ap_status(request: PredictRequest):
     """
     Predict whether an AP is Up or Down based on features.
     Uses a pre-trained decision tree classifier.
+
+    Accepts the 12 fields from Flutter's predictor_page.dart _buildFeatures():
+      client_count, cpu_utilization, mem_free, mem_total, last_modified,
+      hour, mem_usage, overloaded, day_of_week, is_weekend, month, day_of_month
     """
     try:
         model = _load_decision_tree()
     except FileNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
-    features = [
-        [
-            request.building_code,
-            request.floor,
-            request.hour,
-            request.band,
-            request.day_of_week,
-            request.is_weekend,
-            request.day_of_month,
-            request.month,
-        ]
-    ]
+    # Build feature vector matching the model's training features
+    # The model was trained on: client_count, cpu_utilization, mem_free, mem_total,
+    # last_modified, hour, mem_usage, overloaded, day_of_week, is_weekend, month, day_of_month
+    features = [[
+        request.client_count,
+        request.cpu_utilization,
+        request.mem_free,
+        request.mem_total,
+        request.last_modified,
+        request.hour,
+        request.mem_usage,
+        request.overloaded,
+        request.day_of_week,
+        request.is_weekend,
+        request.month,
+        request.day_of_month,
+    ]]
     prediction = model.predict(features)[0]
     probability = model.predict_proba(features)[0].tolist()
+    confidence = max(probability)
 
     return {
         "prediction": "Up" if prediction == 1 else "Down",
+        "confidence": round(confidence, 3),
         "probability": probability,
-        "features": features[0],
+        "features_used": features[0],
     }
 
 
@@ -381,13 +398,29 @@ async def get_ap_daily_trend(ap_name: str):
             "bars": quality_info["bars"],
         })
 
+    # Compute stats for Flutter's APTrendDialog
+    signal_values = [h["signal_db"] for h in hourly_data]
+    avg_db = sum(signal_values) / len(signal_values) if signal_values else 0
+    max_db = max(signal_values) if signal_values else 0
+    min_db = min(signal_values) if signal_values else 0
+    best_hour = signal_values.index(max_db) if signal_values else 0
+    worst_hour = signal_values.index(min_db) if signal_values else 0
+
     return {
         "ap_name": ap_name,
         "building": building,
         "floor": int(floor),
         "lat": float(coords[1]),
         "lng": float(coords[0]),
-        "hourly_data": hourly_data,
+        "trend": hourly_data,  # Flutter reads 'trend'
+        "day_type": "weekday",  # Default to weekday
+        "stats": {
+            "avg_db": round(avg_db, 1),
+            "max_db": round(max_db, 1),
+            "min_db": round(min_db, 1),
+            "best_hour": best_hour,
+            "worst_hour": worst_hour,
+        },
     }
 
 
