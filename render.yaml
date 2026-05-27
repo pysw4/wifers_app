@@ -29,5 +29,5 @@ services:
     name: wifers-app-web
     runtime: static
     buildCommand: "flutter pub get && flutter build web --release"
-    publishDir: build/web
+    staticPublishPath: build/web
     plan: free
