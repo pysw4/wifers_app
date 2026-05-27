@@ -42,27 +42,26 @@ class _MapPageState extends State<MapPage> {
   StreamSubscription<Position>? _positionSubscription;
 
   double _currentZoom = 15.0; // Track zoom level manually (MapController has no zoom getter)
-  
+
   final List<APInfo> _aps = [];
-  
 
   // Heatmap state — always on, loaded on init
   bool _isLoadingHeatmap = false;
   int _selectedHour = DateTime.now().hour;
-  
+
   // Day of week selection: 0=Mon, 6=Sun
   static const List<String> _dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   static const List<String> _dayApiNames = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
   int _selectedDay = DateTime.now().weekday - 1; // DateTime.monday=1 -> our index 0
   String get _selectedDayApiName => _dayApiNames[_selectedDay];
   final Map<String, Color> _signalColors = {
-    'Excellent': const Color(0xFF00E676),  // Bright Green (strongest signal)
-    'Good': const Color(0xFF76FF03),       // Light Green
-    'Fair': const Color(0xFFFFEA00),       // Yellow
-    'Weak': const Color(0xFFFF6D00),       // Orange
-    'Very Poor': const Color(0xFFD50000),  // Red (weakest signal)
+    'Excellent': const Color(0xFF00E676), // Bright Green (strongest signal)
+    'Good': const Color(0xFF76FF03), // Light Green
+    'Fair': const Color(0xFFFFEA00), // Yellow
+    'Weak': const Color(0xFFFF6D00), // Orange
+    'Very Poor': const Color(0xFFD50000), // Red (weakest signal)
   };
-  
+
   // Cache heatmap predictions by AP name
   Map<String, Map<String, dynamic>> _heatmapCache = {};
   Timer? _heatmapRefreshTimer;
@@ -70,6 +69,25 @@ class _MapPageState extends State<MapPage> {
   // Smooth heatmap state (grid mode) - loaded together with AP heatmap data
   List<Map<String, dynamic>> _smoothHeatmapPoints = [];
 
+  // ---------------------------------------------------------------------------
+  //  Recommend 模式
+  // ---------------------------------------------------------------------------
+  bool _isRecommendMode = false;
+  bool _isRecommending = false;
+  LatLng? _selectedPoint;
+  int _recommendRadius = 500;
+  String _recommendMode = 'balanced';
+  String _recommendBuilding = '';
+  List<String> _buildings = [];
+  List<Map<String, dynamic>> _recommendResults = [];
+
+  static const Map<String, _ModeDisplay> _modes = {
+    'distance': _ModeDisplay('Distance Priority', Icons.near_me, Colors.green),
+    'signal': _ModeDisplay('Signal Priority', Icons.signal_wifi_4_bar, Colors.orange),
+    'balanced': _ModeDisplay('Balanced', Icons.balance, Colors.blue),
+  };
+
+  // ---------------------------------------------------------------------------
   Future<void> _loadAps() async {
     try {
       final loaded = await ApDataService.loadAllAps();
@@ -80,6 +98,13 @@ class _MapPageState extends State<MapPage> {
     } catch (e) {
       debugPrint('Failed to load AP geojson: $e');
     }
+  }
+
+  Future<void> _loadBuildings() async {
+    try {
+      final b = await ApDataService.loadBuildings();
+      if (mounted) setState(() => _buildings = b);
+    } catch (_) {}
   }
 
   /// 根据当前地图缩放级别计算 AP 图标大小
@@ -119,88 +144,191 @@ class _MapPageState extends State<MapPage> {
     return true;
   }
 
-
   List<Marker> get _markers {
     final markerSize = _getMarkerSize();
     final heatmapSize = _getMarkerSize(isHeatmap: true);
     final heatmapTextSize = _getHeatmapTextSize();
     final isHeatmapVisible = _heatmapCache.isNotEmpty;
 
-    if (!_shouldShowMarkers) return _currentLocationMarker;
-    
-    if (isHeatmapVisible) {
-      // Heatmap mode: color-coded markers
-      return _aps.where((ap) => _heatmapCache.containsKey(ap.id ?? ap.name)).map((ap) {
-        final key = ap.id ?? ap.name ?? '';
-        final prediction = _heatmapCache[key];
-        final dbm = prediction?['signal_db'] as num? ?? -70;
-        final quality = prediction?['signal_quality'] as String? ?? 'Fair';
-        final color = _signalColors[quality] ?? Colors.grey;
+    final List<Marker> allMarkers = [];
 
-        // If marker is too small, only show a dot without text
-        final showDetail = heatmapSize >= 14;
-
-        return Marker(
-          point: LatLng(ap.lat, ap.lng),
-          width: heatmapSize,
-          height: heatmapSize,
-          child: GestureDetector(
-            onTap: () => _showAPOptions(ap, signalDb: dbm.toDouble()),
-            child: Container(
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: showDetail ? 0.6 : 0.4),
-                shape: BoxShape.circle,
-                border: Border.all(color: Colors.white.withValues(alpha: showDetail ? 0.8 : 0.4), width: showDetail ? 2 : 1),
-                boxShadow: showDetail ? [
-                  BoxShadow(
-                    color: color.withValues(alpha: 0.4),
-                    blurRadius: 8,
-                    spreadRadius: 2,
+    // --- 推荐结果标记 (always visible, highest priority) ---
+    if (_recommendResults.isNotEmpty && _currentZoom >= 14) {
+      for (int i = 0; i < _recommendResults.length; i++) {
+        final r = _recommendResults[i];
+        final lat = (r['lat'] as num).toDouble();
+        final lng = (r['lng'] as num).toDouble();
+        final score = (r['score'] as num?)?.toDouble() ?? 0;
+        final prediction = r['prediction'] as String? ?? 'Unknown';
+        final bgColor = prediction == 'Up' ? Colors.green : Colors.red;
+        allMarkers.add(
+          Marker(
+            point: LatLng(lat, lng),
+            width: 40,
+            height: 44,
+            child: GestureDetector(
+              onTap: () => _showRecommendResultDetail(r),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: bgColor,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: Colors.white, width: 2.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: bgColor.withValues(alpha: 0.5),
+                          blurRadius: 8,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        '${i + 1}',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
                   ),
-                ] : null,
+                  const SizedBox(height: 2),
+                  Text(
+                    '${(score * 100).toStringAsFixed(0)}%',
+                    style: TextStyle(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600,
+                      color: bgColor,
+                    ),
+                  ),
+                ],
               ),
-              child: showDetail ? Center(
-                child: Text(
-                  '${dbm.toInt()}',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: heatmapTextSize,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ) : null,
             ),
           ),
         );
-      }).toList()
-      ..addAll(_currentLocationMarker);
+      }
     }
-    
-    // Normal mode: small dots (hidden when zoom < 12)
-    if (markerSize == 0) return _currentLocationMarker;
 
-    final List<Marker> markers = _aps.map((ap) {
-      return Marker(
-        point: LatLng(ap.lat, ap.lng),
-        width: markerSize + 16,  // more touch area than visible dot
-        height: markerSize + 16,
-        child: GestureDetector(
-          onTap: () => _showAPOptions(ap),
-          child: Container(
-            width: markerSize,
-            height: markerSize,
-            decoration: BoxDecoration(
-              color: const Color.fromRGBO(33, 150, 243, 0.5),
-              shape: BoxShape.circle,
-              border: Border.all(color: const Color.fromRGBO(255, 255, 255, 0.8), width: 1),
-            ),
+    // --- 选点标记 ---
+    if (_selectedPoint != null && (_isRecommendMode || _recommendResults.isNotEmpty)) {
+      allMarkers.add(
+        Marker(
+          point: _selectedPoint!,
+          width: 40,
+          height: 48,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.location_on, color: Colors.purple, size: 34),
+              const Text(
+                'HERE',
+                style: TextStyle(
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.purple,
+                ),
+              ),
+            ],
           ),
         ),
       );
-    }).toList();
+    }
 
-    markers.addAll(_currentLocationMarker);
-    return markers;
+    if (!_shouldShowMarkers) {
+      allMarkers.addAll(_currentLocationMarker);
+      return allMarkers;
+    }
+
+    if (isHeatmapVisible && _recommendResults.isEmpty) {
+      // Heatmap mode: color-coded markers
+      for (final ap in _aps) {
+        final key = ap.id ?? ap.name ?? '';
+        final prediction = _heatmapCache[key];
+        if (prediction == null) continue;
+        final dbm = prediction['signal_db'] as num? ?? -70;
+        final quality = prediction['signal_quality'] as String? ?? 'Fair';
+        final color = _signalColors[quality] ?? Colors.grey;
+        final showDetail = heatmapSize >= 14;
+
+        allMarkers.add(
+          Marker(
+            point: LatLng(ap.lat, ap.lng),
+            width: heatmapSize,
+            height: heatmapSize,
+            child: GestureDetector(
+              onTap: () => _showAPOptions(ap, signalDb: dbm.toDouble()),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: showDetail ? 0.6 : 0.4),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: showDetail ? 0.8 : 0.4),
+                    width: showDetail ? 2 : 1,
+                  ),
+                  boxShadow: showDetail
+                      ? [
+                          BoxShadow(
+                            color: color.withValues(alpha: 0.4),
+                            blurRadius: 8,
+                            spreadRadius: 2,
+                          ),
+                        ]
+                      : null,
+                ),
+                child: showDetail
+                    ? Center(
+                        child: Text(
+                          '${dbm.toInt()}',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: heatmapTextSize,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      )
+                    : null,
+              ),
+            ),
+          ),
+        );
+      }
+    } else if (_recommendResults.isEmpty) {
+      // Normal mode: small dots (hidden when zoom < 12)
+      if (markerSize > 0) {
+        for (final ap in _aps) {
+          allMarkers.add(
+            Marker(
+              point: LatLng(ap.lat, ap.lng),
+              width: markerSize + 16, // more touch area than visible dot
+              height: markerSize + 16,
+              child: GestureDetector(
+                onTap: () => _showAPOptions(ap),
+                child: Container(
+                  width: markerSize,
+                  height: markerSize,
+                  decoration: BoxDecoration(
+                    color: const Color.fromRGBO(33, 150, 243, 0.5),
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: const Color.fromRGBO(255, 255, 255, 0.8),
+                      width: 1,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+      }
+    }
+
+    allMarkers.addAll(_currentLocationMarker);
+    return allMarkers;
   }
 
   List<Marker> get _currentLocationMarker {
@@ -226,7 +354,19 @@ class _MapPageState extends State<MapPage> {
     super.initState();
     _startLocationTracking();
     _loadAps();
+    _loadBuildings();
     _loadHeatmap();
+    _loadRecommendSettings();
+  }
+
+  Future<void> _loadRecommendSettings() async {
+    final s = await StorageService.loadSettings();
+    if (!mounted) return;
+    setState(() {
+      _recommendRadius = s['recommendRadiusMeters'] as int? ?? 500;
+      _recommendMode = s['recommendMode'] as String? ?? 'balanced';
+      _recommendBuilding = s['selectedBuilding'] as String? ?? '';
+    });
   }
 
   @override
@@ -277,7 +417,7 @@ class _MapPageState extends State<MapPage> {
 
   Future<void> _loadHeatmap() async {
     if (_isLoadingHeatmap) return;
-    
+
     setState(() {
       _isLoadingHeatmap = true;
     });
@@ -299,7 +439,7 @@ class _MapPageState extends State<MapPage> {
         hour: _selectedHour,
         day: _selectedDayApiName,
       );
-      
+
       // Save to cache
       await CacheService.set(cacheKey, data);
       _processHeatmapData(data);
@@ -320,7 +460,7 @@ class _MapPageState extends State<MapPage> {
     final apPointsData = data['ap_points'] as Map<String, dynamic>?;
     final points = apPointsData?['points'] as List<dynamic>? ?? [];
     final Map<String, Map<String, dynamic>> cache = {};
-    
+
     for (final point in points) {
       final map = point as Map<String, dynamic>;
       final apName = map['ap_name'] as String;
@@ -358,7 +498,6 @@ class _MapPageState extends State<MapPage> {
           child: Column(
             children: [
               Text('Current: $_selectedHour h'),
-
               const SizedBox(height: 16),
               Expanded(
                 child: GridView.builder(
@@ -378,7 +517,6 @@ class _MapPageState extends State<MapPage> {
                         ),
                         onPressed: () => Navigator.pop(context, index),
                         child: Text('$index'),
-
                       ),
                     );
                   },
@@ -397,6 +535,416 @@ class _MapPageState extends State<MapPage> {
       _loadHeatmap(); // Refresh with new time (loads both AP points and smooth grid)
     }
   }
+
+  // =========================================================================
+  //  Recommend 模式
+  // =========================================================================
+
+  void _toggleRecommendMode() {
+    setState(() {
+      if (_isRecommendMode) {
+        // 退 出推荐模式
+        _isRecommendMode = false;
+        _selectedPoint = null;
+        _recommendResults = [];
+      } else {
+        // 进入推荐模式
+        _isRecommendMode = true;
+        _selectedPoint = null;
+        _recommendResults = [];
+      }
+    });
+  }
+
+  void _onMapTap(TapPosition pos, LatLng point) {
+    if (!_isRecommendMode) return;
+    // 只有点击在校园范围内才记录
+    if (!_isNearCampus(point)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a point inside the UAB campus.')),
+      );
+      return;
+    }
+    setState(() {
+      _selectedPoint = point;
+    });
+    _showRecommendSettings();
+  }
+
+  Future<void> _showRecommendSettings() async {
+    final result = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Padding(
+          padding: EdgeInsets.only(
+            left: 16,
+            right: 16,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.tune, color: Colors.blue),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Recommendation Settings',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, {
+                      'radius': _recommendRadius,
+                      'mode': _recommendMode,
+                      'building': _recommendBuilding,
+                    }),
+                    child: const Text('Confirm'),
+                  ),
+                ],
+              ),
+              const Divider(),
+              // Radius slider
+              Row(
+                children: [
+                  const Icon(Icons.radar, size: 18, color: Colors.grey),
+                  const SizedBox(width: 8),
+                  const Text('Search Radius: '),
+                  Text(
+                    '${_recommendRadius}m',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              Slider(
+                value: _recommendRadius.toDouble(),
+                min: 100,
+                max: 1000,
+                divisions: 9,
+                label: '${_recommendRadius}m',
+                onChanged: (v) => setSheetState(() => _recommendRadius = v.round()),
+              ),
+              const SizedBox(height: 8),
+              // Mode selector
+              Row(
+                children: [
+                  const Icon(Icons.auto_awesome, size: 18, color: Colors.grey),
+                  const SizedBox(width: 8),
+                  const Text('Mode:'),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: SegmentedButton<String>(
+                      segments: _modes.entries
+                          .map((e) => ButtonSegment<String>(
+                                value: e.key,
+                                label: Text(e.value.label, style: const TextStyle(fontSize: 11)),
+                                icon: Icon(e.value.icon, size: 16),
+                              ))
+                          .toList(),
+                      selected: {_recommendMode},
+                      onSelectionChanged: (s) => setSheetState(() => _recommendMode = s.first),
+                      showSelectedIcon: false,
+                      style: ButtonStyle(
+                        visualDensity: VisualDensity.compact,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // Building filter
+              Row(
+                children: [
+                  const Icon(Icons.business, size: 18, color: Colors.grey),
+                  const SizedBox(width: 8),
+                  const Text('Building:'),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _buildings.contains(_recommendBuilding) ? _recommendBuilding : '',
+                        isExpanded: true,
+                        hint: const Text('All Buildings', style: TextStyle(fontSize: 14)),
+                        items: [
+                          const DropdownMenuItem(value: '', child: Text('All Buildings', style: TextStyle(fontSize: 14))),
+                          ..._buildings.map((b) => DropdownMenuItem(value: b, child: Text(b, style: const TextStyle(fontSize: 14)))),
+                        ],
+                        onChanged: (v) => setSheetState(() => _recommendBuilding = v ?? ''),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (result != null && _selectedPoint != null) {
+      setState(() {
+        _recommendRadius = result['radius'] as int;
+        _recommendMode = result['mode'] as String;
+        _recommendBuilding = result['building'] as String;
+      });
+      await _performRecommend();
+    }
+  }
+
+  Future<void> _performRecommend() async {
+    if (_selectedPoint == null) return;
+
+    setState(() => _isRecommending = true);
+
+    try {
+      final resp = await _apiService.recommendAPs(
+        lat: _selectedPoint!.latitude,
+        lng: _selectedPoint!.longitude,
+        radius: _recommendRadius,
+        mode: _recommendMode,
+        building: _recommendBuilding,
+        preferStable: true,
+      );
+
+      final recs = (resp['recommendations'] as List?)
+              ?.map((e) => Map<String, dynamic>.from(e as Map))
+              .toList() ??
+          [];
+
+      setState(() {
+        _recommendResults = recs;
+        _isRecommending = false;
+      });
+
+      if (recs.isNotEmpty) {
+        _showRecommendResults();
+      }
+    } catch (e) {
+      setState(() => _isRecommending = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Recommendation failed: $e')),
+        );
+      }
+    }
+  }
+
+  void _showRecommendResults() {
+    if (_recommendResults.isEmpty) return;
+
+    final modeInfo = _modes[_recommendMode]!;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.45,
+        minChildSize: 0.25,
+        maxChildSize: 0.75,
+        expand: false,
+        builder: (ctx, scrollController) => Column(
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  Icon(modeInfo.icon, color: modeInfo.color),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Top ${_recommendResults.length} APs ($_recommendRadius m)',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(ctx),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: ListView.separated(
+                controller: scrollController,
+                itemCount: _recommendResults.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (ctx, i) {
+                  final r = _recommendResults[i];
+                  final name = r['name'] as String? ?? '';
+                  final building = r['building'] as String? ?? 'Unknown';
+                  final floor = r['floor'];
+                  final distance = (r['distance'] as num?)?.toDouble() ?? 0;
+                  final score = (r['score'] as num?)?.toDouble() ?? 0;
+                  final prediction = r['prediction'] as String? ?? 'Unknown';
+                  final signalDb = (r['signal_db'] as num?)?.toDouble() ?? -70;
+                  final upProb = (r['up_probability'] as num?)?.toDouble() ?? 0;
+                  final lat = (r['lat'] as num).toDouble();
+                  final lng = (r['lng'] as num).toDouble();
+
+                  return ListTile(
+                    leading: Stack(
+                      children: [
+                        CircleAvatar(
+                          backgroundColor: modeInfo.color.withValues(alpha: 0.15),
+                          child: Text(
+                            '${i + 1}',
+                            style: TextStyle(fontWeight: FontWeight.bold, color: modeInfo.color),
+                          ),
+                        ),
+                        if (i < 3)
+                          Positioned(
+                            right: 0,
+                            top: 0,
+                            child: Icon(Icons.star, size: 12, color: Colors.amber[700]),
+                          ),
+                      ],
+                    ),
+                    title: Text(name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '$building • ${floor != null ? 'Floor $floor' : 'Floor unknown'}',
+                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        ),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            Icon(Icons.near_me, size: 12, color: Colors.grey[600]),
+                            const SizedBox(width: 2),
+                            Text('${distance.toStringAsFixed(0)} m', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+                            const SizedBox(width: 10),
+                            Icon(Icons.signal_wifi_4_bar, size: 12, color: _dbmToColor(signalDb)),
+                            const SizedBox(width: 2),
+                            Text('${signalDb.toStringAsFixed(1)} dBm', style: TextStyle(fontSize: 11, color: _dbmToColor(signalDb))),
+                          ],
+                        ),
+                      ],
+                    ),
+                    trailing: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Text(
+                          '${(score * 100).toStringAsFixed(0)}%',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: prediction == 'Up' ? Colors.green : Colors.red,
+                            fontSize: 16,
+                          ),
+                        ),
+                        Text('${upProb.toStringAsFixed(0)}% ↑', style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+                      ],
+                    ),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _navigateToRecommendAp(
+                        name: name,
+                        lat: lat,
+                        lng: lng,
+                      );
+                    },
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showRecommendResultDetail(Map<String, dynamic> r) {
+    final name = r['name'] as String? ?? '';
+    final building = r['building'] as String? ?? 'Unknown';
+    final floor = r['floor'];
+    final distance = (r['distance'] as num?)?.toDouble() ?? 0;
+    final score = (r['score'] as num?)?.toDouble() ?? 0;
+    final prediction = r['prediction'] as String? ?? 'Unknown';
+    final signalDb = (r['signal_db'] as num?)?.toDouble() ?? -70;
+    final upProb = (r['up_probability'] as num?)?.toDouble() ?? 0;
+    final lat = (r['lat'] as num).toDouble();
+    final lng = (r['lng'] as num).toDouble();
+
+    final color = prediction == 'Up' ? Colors.green : Colors.red;
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => Container(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(name, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 4),
+            Text('$building • Floor ${floor ?? "?"}', style: TextStyle(color: Colors.grey[600])),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _buildStat('Distance', '${distance.toStringAsFixed(0)} m', Icons.near_me, Colors.blue),
+                _buildStat('Signal', '${signalDb.toStringAsFixed(1)} dBm', Icons.signal_wifi_4_bar, _dbmToColor(signalDb)),
+                _buildStat('Stability', '${upProb.toStringAsFixed(0)}% ↑', Icons.trending_up, color),
+                _buildStat('Score', '${(score * 100).toStringAsFixed(0)}%', Icons.star, Colors.amber),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _buildActionButton(
+                  icon: Icons.directions,
+                  label: 'Navigate',
+                  color: Colors.blue,
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _navigateToRecommendAp(name: name, lat: lat, lng: lng);
+                  },
+                ),
+                _buildActionButton(
+                  icon: Icons.cancel,
+                  label: 'Close',
+                  color: Colors.grey,
+                  onPressed: () => Navigator.pop(ctx),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStat(String label, String value, IconData icon, Color color) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: color, size: 22),
+        const SizedBox(height: 4),
+        Text(value, style: TextStyle(fontWeight: FontWeight.bold, color: color, fontSize: 13)),
+        Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[600])),
+      ],
+    );
+  }
+
+  // =========================================================================
 
   void _showAPOptions(APInfo ap, {double? signalDb}) async {
     String predictedStatus = 'unknown';
@@ -417,7 +965,11 @@ class _MapPageState extends State<MapPage> {
       predictedStatus = 'error';
     }
 
-    final color = predictedStatus == 'Up' ? Colors.green : predictedStatus == 'Down' ? Colors.red : Colors.orange;
+    final color = predictedStatus == 'Up'
+        ? Colors.green
+        : predictedStatus == 'Down'
+            ? Colors.red
+            : Colors.orange;
 
     if (!mounted) return;
 
@@ -473,16 +1025,19 @@ class _MapPageState extends State<MapPage> {
                 _buildActionButton(
                   icon: Icons.directions,
                   label: 'Navigate',
+                  color: Colors.blue,
                   onPressed: () => _navigateToAP(ap),
                 ),
                 _buildActionButton(
                   icon: Icons.trending_up,
                   label: '24h Trend',
+                  color: Colors.orange,
                   onPressed: () => _showAPTrend(ap),
                 ),
                 _buildActionButton(
                   icon: Icons.favorite,
                   label: 'Favorite',
+                  color: Colors.red,
                   onPressed: () => _favoriteAP(ap),
                 ),
               ],
@@ -497,6 +1052,7 @@ class _MapPageState extends State<MapPage> {
   Widget _buildActionButton({
     required IconData icon,
     required String label,
+    required Color color,
     required VoidCallback onPressed,
   }) {
     return SizedBox(
@@ -510,9 +1066,9 @@ class _MapPageState extends State<MapPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 22),
+            Icon(icon, size: 22, color: color),
             const SizedBox(height: 2),
-            Text(label, style: const TextStyle(fontSize: 11)),
+            Text(label, style: TextStyle(fontSize: 11, color: color)),
           ],
         ),
       ),
@@ -527,16 +1083,16 @@ class _MapPageState extends State<MapPage> {
     final clamped = dbm.clamp(-97.0, -22.0);
     // Normalize to 0.0 (weakest) ~ 1.0 (strongest)
     final t = (clamped - (-97.0)) / (-22.0 - (-97.0)); // t in [0, 1]
-    
+
     // Define gradient stops: Red (weak) → Orange → Yellow → Green (strong)
     const stops = [0.0, 0.33, 0.66, 1.0];
     const colors = [
-      Color(0xFFD50000),  // Red (very poor)
-      Color(0xFFFF6D00),  // Orange (weak)
-      Color(0xFFFFEA00),  // Yellow (fair)
-      Color(0xFF00E676),  // Green (excellent)
+      Color(0xFFD50000), // Red (very poor)
+      Color(0xFFFF6D00), // Orange (weak)
+      Color(0xFFFFEA00), // Yellow (fair)
+      Color(0xFF00E676), // Green (excellent)
     ];
-    
+
     // Find which segment t falls into and interpolate
     for (int i = 0; i < stops.length - 1; i++) {
       if (t >= stops[i] && t <= stops[i + 1]) {
@@ -550,7 +1106,7 @@ class _MapPageState extends State<MapPage> {
   Future<void> _navigateToAP(APInfo ap) async {
     // 先关闭 bottom sheet（使用 rootNavigator 确保只关闭 bottom sheet 不 pop 页面）
     Navigator.of(context, rootNavigator: true).pop();
-    
+
     if (_currentLocation == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -609,7 +1165,7 @@ class _MapPageState extends State<MapPage> {
       if (path.isNotEmpty) {
         final alternativesData = routeResult['alternatives'] as List<dynamic>? ?? [];
         final alternatives = <RouteAlternative>[];
-        
+
         for (var altData in alternativesData) {
           final altPathData = altData['path'] as List<dynamic>;
           final altPath = altPathData.map<LatLng>((item) {
@@ -674,7 +1230,7 @@ class _MapPageState extends State<MapPage> {
       if (path.isNotEmpty && mounted) {
         final alternativesData = routeResult['alternatives'] as List<dynamic>? ?? [];
         final alternatives = <RouteAlternative>[];
-        
+
         for (var altData in alternativesData) {
           final altPathData = altData['path'] as List<dynamic>;
           final altPath = altPathData.map<LatLng>((item) {
@@ -708,6 +1264,81 @@ class _MapPageState extends State<MapPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error fetching route from gate: $e')),
       );
+    }
+  }
+
+  /// Navigate to a recommend-result AP.
+  Future<void> _navigateToRecommendAp({
+    required String name,
+    required double lat,
+    required double lng,
+  }) async {
+    try {
+      final p = await LocationService.getCurrentPosition();
+      final pos = LatLng(p.latitude, p.longitude);
+
+      if (!LocationService.isNearCampus(pos)) {
+        final useGate = await showDialog<bool>(
+          context: context,
+          builder: (c) => AlertDialog(
+            title: const Text('Outside Campus'),
+            content: const Text('Start navigation from campus gate?'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Use Gate')),
+            ],
+          ),
+        );
+        if (useGate != true) return;
+        final path = await _apiService.fetchRoute(
+          LocationService.campusGateLng,
+          LocationService.campusGateLat,
+          lng,
+          lat,
+        );
+        if (path.isNotEmpty && mounted) {
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => RoutePage(
+                path: path,
+                title: 'Navigate to $name (from Gate)',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      final routeResult = await _apiService.fetchAdvancedRoute(
+        p.longitude,
+        p.latitude,
+        lng,
+        lat,
+        acceptableRange: 500,
+      );
+      final pathData = routeResult['path'] as List<dynamic>;
+      final path = pathData
+          .map<LatLng>((item) => LatLng(
+                (item['lat'] as num).toDouble(),
+                (item['lng'] as num).toDouble(),
+              ))
+          .toList();
+
+      if (path.isNotEmpty && mounted) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => RoutePage(path: path, title: 'Navigate to $name'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Navigation error: $e')),
+        );
+      }
     }
   }
 
@@ -747,11 +1378,11 @@ class _MapPageState extends State<MapPage> {
   /// Build smooth heatmap grid polygons from the loaded grid points
   List<Polygon> get _smoothHeatmapPolygons {
     if (_smoothHeatmapPoints.isEmpty) return [];
-    
+
     // Estimate grid cell size from the first two points
     final first = _smoothHeatmapPoints[0];
     final second = _smoothHeatmapPoints.length > 1 ? _smoothHeatmapPoints[1] : null;
-    double latStep = 0.0004;  // ~40m default fallback
+    double latStep = 0.0004; // ~40m default fallback
     double lngStep = 0.0004;
     if (second != null) {
       latStep = ((second['lat'] as num) - (first['lat'] as num)).abs().toDouble();
@@ -768,7 +1399,7 @@ class _MapPageState extends State<MapPage> {
       final lng = (point['lng'] as num).toDouble();
       final quality = point['signal_quality'] as String? ?? 'Fair';
       final color = _signalColors[quality] ?? Colors.grey;
-      
+
       // Create a small rectangle polygon around each grid point
       return Polygon(
         points: [
@@ -895,6 +1526,53 @@ class _MapPageState extends State<MapPage> {
     return const SizedBox.shrink();
   }
 
+  // =========================================================================
+  //  Recommend 模式提示条
+  // =========================================================================
+  Widget _buildRecommendBanner() {
+    if (!_isRecommendMode) return const SizedBox.shrink();
+    return Positioned(
+      top: 10,
+      left: 10,
+      right: 70,
+      child: Material(
+        elevation: 4,
+        borderRadius: BorderRadius.circular(12),
+        color: Colors.blue.shade700,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            children: [
+              const Icon(Icons.touch_app, color: Colors.white, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _selectedPoint == null
+                      ? 'Tap on the map to choose a location'
+                      : 'Location selected! Tap ✓ to configure',
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                ),
+              ),
+              if (_selectedPoint != null)
+                IconButton(
+                  icon: const Icon(Icons.check_circle, color: Colors.white),
+                  onPressed: _showRecommendSettings,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white70),
+                onPressed: _toggleRecommendMode,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final displayCenter = _currentLocation ?? _center;
@@ -920,7 +1598,7 @@ class _MapPageState extends State<MapPage> {
                   setState(() {});
                 }
               },
-
+              onTap: _onMapTap,
             ),
             children: [
               TileLayer(
@@ -940,23 +1618,69 @@ class _MapPageState extends State<MapPage> {
           _buildHeatmapLegend(),
           // Day of week selector
           _buildDaySelector(),
+          // Recommend banner
+          _buildRecommendBanner(),
+          // Recommend loading indicator
+          if (_isRecommending)
+            const Positioned(
+              top: 60,
+              left: 10,
+              child: Card(
+                child: Padding(
+                  padding: EdgeInsets.all(12),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+                      SizedBox(width: 8),
+                      Text('Finding best APs...'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        heroTag: 'time',
-        mini: true,
-        onPressed: _showHourPicker,
-        child: _isLoadingHeatmap
-            ? const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : Text(
-                '${_selectedHour}h',
-                style: const TextStyle(fontSize: 12),
-              ),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Recommend FAB
+          FloatingActionButton(
+            heroTag: 'recommend',
+            mini: true,
+            backgroundColor: _isRecommendMode ? Colors.red : Colors.green,
+            onPressed: _toggleRecommendMode,
+            child: Icon(
+              _isRecommendMode ? Icons.close : Icons.recommend,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(height: 8),
+          // Time picker FAB
+          FloatingActionButton(
+            heroTag: 'time',
+            mini: true,
+            onPressed: _showHourPicker,
+            child: _isLoadingHeatmap
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Text(
+                    '${_selectedHour}h',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+          ),
+        ],
       ),
     );
   }
+}
+
+class _ModeDisplay {
+  final String label;
+  final IconData icon;
+  final Color color;
+  const _ModeDisplay(this.label, this.icon, this.color);
 }
