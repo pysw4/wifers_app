@@ -368,22 +368,20 @@ def _compute_score(
     mode: str,
     prefer_stable: bool,
 ) -> float:
-    """Calculate a composite score for a single AP."""
+    """Calculate a composite score for a single AP.
+
+    Scoring is based on distance + signal strength only.
+    ML status prediction is not used in scoring.
+    """
     distance_score = max(0.0, 1.0 - distance / radius)
     signal_score = max(0.0, min(1.0, (signal_db + 97.0) / 75.0))
-    status_score = up_probability_pct / 100.0
 
     if mode == "distance":
-        return distance_score * 0.8 + signal_score * 0.15 + status_score * 0.05
+        return distance_score * 0.90 + signal_score * 0.10
     if mode == "signal":
-        return signal_score * 0.7 + status_score * 0.2 + distance_score * 0.1
-    # balanced
-    sw = 0.4 if prefer_stable else 0.25
-    return (
-        status_score * sw
-        + distance_score * (0.5 - sw * 0.3)
-        + signal_score * (0.5 - sw * 0.2)
-    )
+        return signal_score * 0.90 + distance_score * 0.10
+    # balanced: equal weight on distance and signal
+    return distance_score * 0.50 + signal_score * 0.50
 
 
 # ===================================================================
@@ -523,55 +521,21 @@ def recommend_aps(body: dict):
         except Exception:
             signal_map = {}
 
-        # 6. Batch ML prediction (all APs share the same static features in the current
-        #    implementation — only hour/day fields change per hour)
+        # 6. Signal strength from heatmap (per-AP, based on current hour/day)
         ap_names = list(ap_info_map.keys())
         n_aps = len(ap_names)
 
-        feature_matrix = np.tile(
-            [
-                10.0,                              # client_count
-                50.0,                              # cpu_utilization
-                1000.0,                            # mem_free
-                2000.0,                            # mem_total
-                1640995200.0,                      # last_modified
-                float(current_hour),
-                50.0,                              # mem_usage
-                0.0 if prefer_stable else 1.0,    # overloaded
-                float(current_day),
-                1.0 if current_day >= 5 else 0.0,  # is_weekend
-                float(now.month),
-                float(now.day),
-            ],
-            (n_aps, 1),
-        )
-        feature_df = pd.DataFrame(feature_matrix, columns=MODEL_FEATURES)
-        batch_preds = ml_model.predict(feature_df)
-        batch_probas = ml_model.predict_proba(feature_df)
-
-        predictions: list[dict] = []
-        for j in range(n_aps):
-            prob = batch_probas[j]
-            up_pct = _up_proba(prob)
-            predictions.append(
-                {
-                    "prediction": _to_pred_label(batch_preds[j]),
-                    "confidence": round(float(max(prob)), 3),
-                    "up_probability": round(up_pct * 100, 1),
-                }
-            )
-
-        # 7. Score & rank
+        # 7. Score & rank — based on distance + signal strength
+        #    ML prediction is informational only, not used in scoring
         scored: list[dict] = []
         for i, ap_name in enumerate(ap_names):
             info = ap_info_map[ap_name]
-            pred = predictions[i]
             sig = signal_map.get(ap_name, {"signal_db": -70, "signal_quality": "Fair", "bars": 1})
 
             score = _compute_score(
                 distance=info["distance"],
                 signal_db=sig["signal_db"],
-                up_probability_pct=pred["up_probability"],
+                up_probability_pct=50.0,  # neutral — not used in scoring
                 radius=radius,
                 mode=mode,
                 prefer_stable=prefer_stable,
@@ -585,9 +549,9 @@ def recommend_aps(body: dict):
                     "lat": info["lat"],
                     "lng": info["lng"],
                     "distance": round(info["distance"], 1),
-                    "prediction": pred["prediction"],
-                    "confidence": pred["confidence"],
-                    "up_probability": pred["up_probability"],
+                    "prediction": "N/A",
+                    "confidence": 0.0,
+                    "up_probability": 0.0,
                     "score": round(score, 4),
                     "signal_db": sig["signal_db"],
                     "signal_quality": sig["signal_quality"],
