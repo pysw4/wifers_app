@@ -5,6 +5,10 @@ set -e
 echo "🔨 Building Flutter Web..."
 flutter build web --release
 
+echo "📂 Copying heatmap static files..."
+cp -r web/heatmaps build/web/heatmaps
+echo "   ✅ Heatmap files copied to build/web/heatmaps/"
+
 echo "📦 Deploying to gh-pages branch..."
 cd build/web
 

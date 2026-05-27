@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:wifers_app/services/api_service.dart';
 import 'package:wifers_app/services/ap_data_service.dart';
+import 'package:wifers_app/services/heatmap_asset_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
 import 'package:wifers_app/services/cache_service.dart';
@@ -435,6 +436,21 @@ class _MapPageState extends State<MapPage> {
         return;
       }
 
+      // Try loading from static files first (avoids API cold start / quota)
+      try {
+        final staticData = await HeatmapAssetService.loadHeatmap(
+          hour: _selectedHour,
+          day: _selectedDayApiName,
+        );
+        await CacheService.set(cacheKey, staticData);
+        _processHeatmapData(staticData);
+        debugPrint('Loaded heatmap from static file');
+        return;
+      } catch (staticError) {
+        debugPrint('Static heatmap load failed, falling back to API: $staticError');
+      }
+
+      // Fallback: load from API
       final data = await _apiService.getSignalHeatmap(
         hour: _selectedHour,
         day: _selectedDayApiName,
