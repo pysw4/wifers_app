@@ -49,7 +49,7 @@ app.*.map.json
 cache/
 results/
 .venv/
-precomputed/
+# precomputed/  # 取消注释以排除预计算数据（Render 部署需要此数据）
 
 
 

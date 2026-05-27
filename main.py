@@ -84,6 +84,11 @@ ml_model = None
 model_path = None
 _initialized = False
 
+# AP spatial index for fast nearest-AP lookup
+_ap_coords = None  # list of (ap_name, lat, lng)
+_ap_kdtree = None  # scipy.spatial.KDTree
+_ap_name_to_data = None  # {ap_name: {building, floor, lat, lng}}
+
 UAB_bbox = 41.50736, 41.49505, 2.11543, 2.09491
 MODEL_FEATURES = [
     'client_count',
@@ -109,7 +114,7 @@ FALLBACK_MODEL_PATH = Path.cwd() / 'models' / MODEL_FILE_NAME
 
 def init_graph(force: bool = False):
     """Initialize the OSM graph and AP nodes (lazy-loaded)."""
-    global G, G_AP_nodes, G_road
+    global G, G_AP_nodes, G_road, _ap_coords, _ap_kdtree, _ap_name_to_data
     if G is not None and not force:
         return G, G_AP_nodes
 
@@ -129,7 +134,44 @@ def init_graph(force: bool = False):
     logger.info("Adding AP nodes to graph...")
     G_AP_nodes = add_aps_to_graph(G, bbox=[UAB_bbox[3], UAB_bbox[0], UAB_bbox[2], UAB_bbox[1]])
     logger.info(f"Loaded graph with {len(G.nodes())} total nodes, {len(G_AP_nodes)} AP nodes added")
+    
+    # Build AP spatial index (KD-Tree) for O(log N) nearest-AP lookup
+    _build_ap_spatial_index()
+    
     return G, G_AP_nodes
+
+
+def _build_ap_spatial_index():
+    """Build a KD-Tree spatial index for fast nearest-AP lookup.
+    
+    This replaces the O(N × M) nested loop in recommend_aps with O(N log M).
+    """
+    global _ap_coords, _ap_kdtree, _ap_name_to_data
+    from scipy.spatial import KDTree
+    
+    _ap_coords = []
+    _ap_name_to_data = {}
+    
+    for ap_name in G_AP_nodes:
+        ap_data = G.nodes[ap_name]
+        ax = ap_data.get("x")
+        ay = ap_data.get("y")
+        if ax is None or ay is None:
+            continue
+        # Use (lat, lng) as coordinates for KD-Tree
+        _ap_coords.append([ay, ax])
+        _ap_name_to_data[ap_name] = {
+            "lat": ay,
+            "lng": ax,
+            "building": ap_data.get("building", "Unknown"),
+            "floor": ap_data.get("height", 0),
+        }
+    
+    if _ap_coords:
+        _ap_kdtree = KDTree(_ap_coords)
+        logger.info(f"Built AP spatial index with {len(_ap_coords)} APs")
+    else:
+        logger.warning("No AP coordinates available for spatial index")
 
 
 def load_ml_model(force: bool = False):
@@ -245,10 +287,12 @@ async def full_status():
 
 
 @app.post("/recommend")
-
 def recommend_aps(body: dict):
     """
     Fast AP recommendation using graph + heatmap cache + ML model.
+    
+    Uses KD-Tree spatial index for O(N log M) nearest-AP lookup
+    instead of O(N × M) nested loops.
     
     Request body:
     {
@@ -266,6 +310,8 @@ def recommend_aps(body: dict):
         raise HTTPException(status_code=503, detail="Graph not loaded yet")
     if not ml_model:
         raise HTTPException(status_code=503, detail="ML model not loaded yet")
+    if _ap_kdtree is None:
+        raise HTTPException(status_code=503, detail="AP spatial index not built yet")
     
     lat = body.get("lat")
     lng = body.get("lng")
@@ -287,64 +333,70 @@ def recommend_aps(body: dict):
         source_node = int(ox.distance.nearest_nodes(G_road, lng, lat))
         logger.info(f"Recommend: user at ({lat}, {lng}), nearest road node={source_node}")
         
-        # 2. Find qualified nodes within radius
+        # 2. Find qualified nodes within radius (uses Dijkstra, unavoidable)
         qualified = find_qualified_in_range(G, source_node, acceptable_range=radius)
         if not qualified:
             return {"recommendations": [], "message": f"No reachable nodes within {radius}m"}
         
-        # 3. For each qualified node, find the nearest AP by Euclidean distance
-        #    (find_ap_near_candidates requires 'height' attribute which road nodes don't have)
-        ap_distances = {}  # {ap_name: {distance, lat, lng, building, floor}}
+        # 3. Use KD-Tree to find nearest AP for each qualified node (O(N log M))
+        #    Build a list of (lat, lng) for all qualified nodes
+        qualified_coords = []
+        valid_qualified = []
         for candidate in qualified:
             candidate_data = G.nodes[candidate]
             cx, cy = candidate_data.get("x"), candidate_data.get("y")
             if cx is None or cy is None:
                 continue
+            qualified_coords.append([cy, cx])  # (lat, lng)
+            valid_qualified.append(candidate)
+        
+        if not qualified_coords:
+            return {"recommendations": [], "message": "No reachable nodes with coordinates"}
+        
+        # Batch query KD-Tree: find nearest AP for each qualified node
+        # Returns (distances, indices) where indices map to _ap_coords
+        kd_distances, kd_indices = _ap_kdtree.query(qualified_coords, k=1)
+        
+        # Build ap_distances dict: {ap_name: {distance, lat, lng, building, floor}}
+        ap_distances = {}
+        ap_name_list = list(_ap_name_to_data.keys())
+        
+        for i, candidate in enumerate(valid_qualified):
+            ap_idx = kd_indices[i]
+            ap_name = ap_name_list[ap_idx]
             
-            # Find nearest AP by Euclidean distance
-            best_ap = None
-            best_euclidean = float('inf')
-            for ap_name in G_AP_nodes:
-                ap_data = G.nodes[ap_name]
-                ax, ay = ap_data.get("x"), ap_data.get("y")
-                if ax is None or ay is None:
-                    continue
-                ed = ((ax - cx)**2 + (ay - cy)**2) ** 0.5
-                if ed < best_euclidean:
-                    best_euclidean = ed
-                    best_ap = ap_name
+            if ap_name in ap_distances:
+                continue  # Already found this AP
             
-            if best_ap and best_ap not in ap_distances:
-                # Get walking distance from source to candidate
-                try:
-                    dist = nx.dijkstra_path_length(G, source=source_node, target=candidate, weight='length')
-                except (nx.NetworkXNoPath, Exception):
-                    dist = radius  # fallback
-                
-                node_data = G.nodes[best_ap]
-                ap_distances[best_ap] = {
-                    "distance": dist,
-                    "lat": node_data.get("y", 0),
-                    "lng": node_data.get("x", 0),
-                    "building": node_data.get("building", "Unknown"),
-                    "floor": node_data.get("height", 0),
-                }
-
+            ap_info = _ap_name_to_data[ap_name]
+            
+            # Get walking distance from source to candidate
+            try:
+                dist = nx.dijkstra_path_length(G, source=source_node, target=candidate, weight='length')
+            except (nx.NetworkXNoPath, Exception):
+                dist = radius  # fallback
+            
+            ap_distances[ap_name] = {
+                "distance": dist,
+                "lat": ap_info["lat"],
+                "lng": ap_info["lng"],
+                "building": ap_info["building"],
+                "floor": ap_info["floor"],
+            }
         
         if not ap_distances:
             return {"recommendations": [], "message": "No APs found near reachable nodes"}
         
-        # 5. Apply building filter
+        # 4. Apply building filter
         if building_filter:
             ap_distances = {k: v for k, v in ap_distances.items() if v["building"] == building_filter}
             if not ap_distances:
                 return {"recommendations": [], "message": f"No APs found in building '{building_filter}'"}
         
-        # 6. Get signal strength from merged heatmap (memory, no disk I/O)
+        # 5. Get signal strength from heatmap cache (memory, no disk I/O)
         try:
             heatmap_data = _get_hourly_data(current_hour)
             ap_points = heatmap_data.get("ap_points", {})
-
             points = ap_points.get("points", [])
             signal_map = {}  # {ap_name: {signal_db, signal_quality, bars}}
             for point in points:
@@ -358,30 +410,34 @@ def recommend_aps(body: dict):
         except Exception:
             signal_map = {}
         
-        # 7. Batch predict AP status using ML model
-        feature_batch = []
+        # 6. Batch predict AP status using ML model (vectorized)
         ap_names = list(ap_distances.keys())
-        for ap_name in ap_names:
-            feature_batch.append({
-                "client_count": 10,
-                "cpu_utilization": 50.0,
-                "mem_free": 1000.0,
-                "mem_total": 2000.0,
-                "last_modified": 1640995200.0,
-                "hour": float(current_hour),
-                "mem_usage": 50.0,
-                "overloaded": 0 if prefer_stable else 1,
-                "day_of_week": float(current_day),
-                "is_weekend": 1 if current_day >= 5 else 0,
-                "month": float(now.month),
-                "day_of_month": float(now.day),
-            })
+        n_aps = len(ap_names)
+        
+        # Build feature matrix as numpy array for vectorized prediction
+        feature_matrix = np.array([[
+            10.0,           # client_count
+            50.0,           # cpu_utilization
+            1000.0,         # mem_free
+            2000.0,         # mem_total
+            1640995200.0,   # last_modified
+            float(current_hour),
+            50.0,           # mem_usage
+            0.0 if prefer_stable else 1.0,  # overloaded
+            float(current_day),
+            1.0 if current_day >= 5 else 0.0,  # is_weekend
+            float(now.month),
+            float(now.day),
+        ]] * n_aps)
+        
+        feature_df = pd.DataFrame(feature_matrix, columns=MODEL_FEATURES)
+        batch_preds = ml_model.predict(feature_df)
+        batch_probas = ml_model.predict_proba(feature_df)
         
         predictions = []
-        for features in feature_batch:
-            df = _build_feature_dataframe(features)
-            pred = ml_model.predict(df)[0]
-            proba = ml_model.predict_proba(df)[0]
+        for j in range(n_aps):
+            pred = batch_preds[j]
+            proba = batch_probas[j]
             up_prob = _up_probability_from_proba(proba)
             predictions.append({
                 "prediction": _to_prediction_label(pred),
@@ -389,7 +445,7 @@ def recommend_aps(body: dict):
                 "up_probability": round(up_prob * 100, 1),
             })
         
-        # 8. Score and rank APs
+        # 7. Score and rank APs
         scored_aps = []
         for i, ap_name in enumerate(ap_names):
             info = ap_distances[ap_name]
