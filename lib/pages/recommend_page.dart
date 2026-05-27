@@ -10,654 +10,180 @@ import 'package:wifers_app/pages/route_page.dart';
 
 class RecommendPage extends StatefulWidget {
   const RecommendPage({super.key});
-
   @override
   State<RecommendPage> createState() => RecommendPageState();
 }
 
 class RecommendedAp {
-  final String id;
-  final String name;
-  final String building;
+  final String id, name, building, prediction, signalQuality;
   final int? floor;
-  final double lat;
-  final double lng;
-  final double distance;
-  final String prediction;
-  final double confidence;
-  final double score;
-  final double signalDb;
-  final String signalQuality;
   final int bars;
-  final double upProbability;
+  final double lat, lng, distance, confidence, score, signalDb, upProbability;
 
   RecommendedAp({
-    required this.id,
-    required this.name,
-    required this.building,
-    this.floor,
-    required this.lat,
-    required this.lng,
-    required this.distance,
-    required this.prediction,
-    required this.confidence,
-    required this.score,
-    this.signalDb = -70,
-    this.signalQuality = 'Fair',
-    this.bars = 1,
+    required this.id, required this.name, required this.building,
+    this.floor, required this.lat, required this.lng, required this.distance,
+    required this.prediction, required this.confidence, required this.score,
+    this.signalDb = -70, this.signalQuality = 'Fair', this.bars = 1,
     this.upProbability = 0,
   });
 
-  factory RecommendedAp.fromJson(Map<String, dynamic> map) {
-    return RecommendedAp(
-      id: map['id'] as String? ?? '',
-      name: map['name'] as String? ?? '',
-      building: map['building'] as String? ?? 'Unknown',
-      floor: map['floor'] as int?,
-      lat: (map['lat'] as num?)?.toDouble() ?? 0.0,
-      lng: (map['lng'] as num?)?.toDouble() ?? 0.0,
-      distance: (map['distance'] as num?)?.toDouble() ?? 0.0,
-      prediction: map['prediction'] as String? ?? 'Unknown',
-      confidence: (map['confidence'] as num?)?.toDouble() ?? 0.0,
-      score: (map['score'] as num?)?.toDouble() ?? 0.0,
-      signalDb: (map['signal_db'] as num?)?.toDouble() ?? -70,
-      signalQuality: map['signal_quality'] as String? ?? 'Fair',
-      bars: map['bars'] as int? ?? 1,
-      upProbability: (map['up_probability'] as num?)?.toDouble() ?? 0.0,
-    );
-  }
+  factory RecommendedAp.fromJson(Map<String, dynamic> map) => RecommendedAp(
+    id: map['id'] ?? '', name: map['name'] ?? '', building: map['building'] ?? 'Unknown',
+    floor: map['floor'] as int?,
+    lat: (map['lat'] as num?)?.toDouble() ?? 0, lng: (map['lng'] as num?)?.toDouble() ?? 0,
+    distance: (map['distance'] as num?)?.toDouble() ?? 0,
+    prediction: map['prediction'] ?? 'Unknown', confidence: (map['confidence'] as num?)?.toDouble() ?? 0,
+    score: (map['score'] as num?)?.toDouble() ?? 0,
+    signalDb: (map['signal_db'] as num?)?.toDouble() ?? -70,
+    signalQuality: map['signal_quality'] ?? 'Fair', bars: map['bars'] as int? ?? 1,
+    upProbability: (map['up_probability'] as num?)?.toDouble() ?? 0,
+  );
 }
 
-class RecommendPageState extends State<RecommendPage> {
-  final ApiService _apiService = ApiService();
-  bool _isLoading = false;
-  String _statusMessage = 'Waiting for recommendation';
-  String? _locationLabel;
-  bool _preferStableAps = true;
-  int _recommendRadiusMeters = 500;
-  String _recommendMode = 'balanced';
-  List<RecommendedAp> _recommendations = [];
-  List<String> _buildings = [];
-  String _selectedBuilding = '';
+class _ModeDisplay { final String label; final IconData icon; final Color color; const _ModeDisplay(this.label, this.icon, this.color); }
 
-  // Mode display info
-  static const Map<String, _ModeDisplay> _modeDisplay = {
+class RecommendPageState extends State<RecommendPage> {
+  final _api = ApiService();
+  bool _loading = false, _preferStable = true, _useGate = false;
+  String _status = 'Waiting for recommendation', _mode = 'balanced', _building = '';
+  String? _locLabel;
+  int _radius = 500;
+  List<RecommendedAp> _results = [];
+  List<String> _buildings = [];
+
+  static const _modes = {
     'distance': _ModeDisplay('Distance Priority', Icons.near_me, Colors.green),
     'signal': _ModeDisplay('Signal Priority', Icons.signal_wifi_4_bar, Colors.orange),
     'balanced': _ModeDisplay('Balanced', Icons.balance, Colors.blue),
   };
 
   @override
-  void initState() {
-    super.initState();
-    _loadSettings();
-    _loadBuildings();
-    _updateLocationLabel();
-  }
-
-  /// Public method to reload settings from storage (called when switching tabs)
-  void reloadSettings() {
-    _loadSettings();
-  }
+  void initState() { super.initState(); _loadSettings(); _loadBuildings(); _updateLoc(); }
+  void reloadSettings() => _loadSettings();
 
   Future<void> _loadSettings() async {
-    final settings = await StorageService.loadSettings();
+    final s = await StorageService.loadSettings();
     if (!mounted) return;
-    setState(() {
-      _preferStableAps = settings['preferStableAps'] ?? true;
-      _recommendRadiusMeters = settings['recommendRadiusMeters'] ?? 500;
-      _recommendMode = settings['recommendMode'] as String? ?? 'balanced';
-      _selectedBuilding = settings['selectedBuilding'] as String? ?? '';
-    });
+    setState(() { _preferStable = s['preferStableAps'] ?? true; _radius = s['recommendRadiusMeters'] ?? 500; _mode = s['recommendMode'] as String? ?? 'balanced'; _building = s['selectedBuilding'] as String? ?? ''; });
   }
 
-  /// Save only the mode to storage without overwriting other settings
-  Future<void> _saveModeToStorage(String mode) async {
-    final settings = await StorageService.loadSettings();
-    settings['recommendMode'] = mode;
-    await StorageService.saveSettings(settings);
-  }
-
-  /// Save the selected building to storage
-  Future<void> _saveBuildingToStorage(String building) async {
-    final settings = await StorageService.loadSettings();
-    settings['selectedBuilding'] = building;
-    await StorageService.saveSettings(settings);
-  }
+  Future<void> _saveMode(String m) async { final s = await StorageService.loadSettings(); s['recommendMode'] = m; await StorageService.saveSettings(s); }
+  Future<void> _saveBuilding(String b) async { final s = await StorageService.loadSettings(); s['selectedBuilding'] = b; await StorageService.saveSettings(s); }
 
   Future<void> _loadBuildings() async {
-    try {
-      final buildings = await ApDataService.loadBuildings();
-      setState(() {
-        _buildings = buildings;
-      });
-    } catch (e) {
-      debugPrint('Failed to load buildings: $e');
-    }
+    try { setState(() { _buildings = await ApDataService.loadBuildings(); }); } catch (_) {}
   }
 
-  String get _modeLabel {
-    final display = _modeDisplay[_recommendMode];
-    return display?.label ?? 'Balanced';
+  String get _modeLabel => _modes[_mode]?.label ?? 'Balanced';
+  IconData get _modeIcon => _modes[_mode]?.icon ?? Icons.balance;
+  Color get _modeColor => _modes[_mode]?.color ?? Colors.blue;
+
+  Future<void> _updateLoc() async {
+    try { final p = await LocationService.getCurrentPosition(); setState(() { _locLabel = '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}'; }); } catch (_) { setState(() { _locLabel = 'Location unavailable'; }); }
   }
 
-  IconData get _modeIconData {
-    final display = _modeDisplay[_recommendMode];
-    return display?.icon ?? Icons.balance;
-  }
-
-  Color get _modeColor {
-    final display = _modeDisplay[_recommendMode];
-    return display?.color ?? Colors.blue;
-  }
-
-  Future<void> _updateLocationLabel() async {
-    try {
-      final position = await LocationService.getCurrentPosition();
-      setState(() {
-        _locationLabel = '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
-      });
-    } catch (e) {
-      setState(() {
-        _locationLabel = 'Location unavailable';
-      });
-    }
+  Future<bool> _showGateDialog(String title, String content) async {
+    if (!mounted) return false;
+    return await showDialog<bool>(context: context, builder: (c) => AlertDialog(title: Text(title), content: Text(content), actions: [
+      TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+      TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Use Campus Gate')),
+    ])) ?? false;
   }
 
   Future<void> _getRecommendation() async {
-    setState(() {
-      _isLoading = true;
-      _statusMessage = 'Calculating recommendations...';
-      _recommendations = [];
-    });
-
+    setState(() { _loading = true; _status = 'Calculating...'; _results = []; });
     try {
-      LatLng userLocation;
-      bool usingGate = false;
-
+      LatLng pos;
       try {
-        final position = await LocationService.getCurrentPosition();
-        userLocation = LatLng(position.latitude, position.longitude);
-
-        // If outside campus, offer to use campus gate as reference
-        if (!LocationService.isNearCampus(userLocation)) {
-          if (!mounted) return;
-          final useGate = await showDialog<bool>(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Outside Campus Area'),
-              content: const Text(
-                'You are currently outside the UAB campus area. '
-                'Recommendations will be based on the campus main entrance.\n\n'
-                'Would you like to continue?',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('Cancel'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Use Campus Gate'),
-                ),
-              ],
-            ),
-          );
-          if (useGate != true) {
-            setState(() {
-              _statusMessage = 'Recommendation cancelled.';
-              _isLoading = false;
-            });
-            return;
+        final p = await LocationService.getCurrentPosition(); pos = LatLng(p.latitude, p.longitude);
+        if (!LocationService.isNearCampus(pos)) {
+          if (!await _showGateDialog('Outside Campus', 'You are outside the UAB campus. Use the campus main entrance?')) {
+            if (mounted) setState(() { _status = 'Cancelled.'; _loading = false; }); return;
           }
-          userLocation = LocationService.campusGate;
-          usingGate = true;
+          pos = LocationService.campusGate; _useGate = true;
         }
-      } catch (e) {
-        // Location unavailable, fallback to campus gate
-        if (!mounted) return;
-        final useGate = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Location Unavailable'),
-            content: const Text(
-              'Could not determine your current location.\n\n'
-              'Would you like to use the campus main entrance as the starting point for recommendations?',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Use Campus Gate'),
-              ),
-            ],
-          ),
-        );
-        if (useGate != true) {
-          setState(() {
-            _statusMessage = 'Recommendation cancelled.';
-            _isLoading = false;
-          });
-          return;
+      } catch (_) {
+        if (!await _showGateDialog('Location Unavailable', 'Could not determine your location. Use campus main entrance?')) {
+          if (mounted) setState(() { _status = 'Cancelled.'; _loading = false; }); return;
         }
-        userLocation = LocationService.campusGate;
-        usingGate = true;
+        pos = LocationService.campusGate; _useGate = true;
       }
 
-      // Build a cache key based on location, building filter, and current settings
-      final cacheLat = userLocation.latitude.toStringAsFixed(4);
-      final cacheLng = userLocation.longitude.toStringAsFixed(4);
-      final buildingKey = _selectedBuilding.isNotEmpty ? _selectedBuilding.replaceAll(' ', '_') : 'all';
-      final cacheKey = 'recommend_${cacheLat}_${cacheLng}_${buildingKey}_$_recommendRadiusMeters$_preferStableAps$_recommendMode${usingGate ? '_gate' : ''}';
-
-      // Try to load from cache first
+      final ck = 'recommend_${pos.latitude.toStringAsFixed(4)}_${pos.longitude.toStringAsFixed(4)}_${_building.isNotEmpty ? _building : 'all'}_$_radius$_preferStable$_mode${_useGate ? '_gate' : ''}';
       final settings = await StorageService.loadSettings();
-      final cacheDuration = Duration(
-        minutes: settings['cacheDurationMinutes'] as int? ?? 60,
-      );
-
-      final cachedResult = await CacheService.get<String>(cacheKey, ttl: cacheDuration);
-      if (cachedResult != null) {
-        final decoded = jsonDecode(cachedResult) as List<dynamic>;
-        final cachedAps = decoded.map((item) {
-          return RecommendedAp.fromJson(item as Map<String, dynamic>);
-        }).toList();
-
-        setState(() {
-          _recommendations = cachedAps;
-          _statusMessage = 'Top ${cachedAps.length} recommendations ($_modeLabel).';
-        });
+      final cached = await CacheService.get<String>(ck, ttl: Duration(minutes: settings['cacheDurationMinutes'] as int? ?? 60));
+      if (cached != null) {
+        final list = (jsonDecode(cached) as List).map((e) => RecommendedAp.fromJson(e as Map<String, dynamic>)).toList();
+        setState(() { _results = list; _status = 'Top ${list.length} recommendations ($_modeLabel).'; _loading = false; });
         return;
       }
 
-      // Use the new backend /recommend API (fast: graph + heatmap cache + ML model)
-      final response = await _apiService.recommendAPs(
-        lat: userLocation.latitude,
-        lng: userLocation.longitude,
-        radius: _recommendRadiusMeters,
-        mode: _recommendMode,
-        building: _selectedBuilding,
-        preferStable: _preferStableAps,
-      );
-
-      final recommendations = response['recommendations'] as List<dynamic>? ?? [];
-      final topAps = recommendations
-          .map((item) => RecommendedAp.fromJson(item as Map<String, dynamic>))
-          .toList();
-
-      // Save to cache
-      final cacheData = topAps.map((ap) => {
-        'id': ap.id,
-        'name': ap.name,
-        'building': ap.building,
-        'floor': ap.floor,
-        'lat': ap.lat,
-        'lng': ap.lng,
-        'distance': ap.distance,
-        'prediction': ap.prediction,
-        'confidence': ap.confidence,
-        'score': ap.score,
-        'signal_db': ap.signalDb,
-        'signal_quality': ap.signalQuality,
-        'bars': ap.bars,
-        'up_probability': ap.upProbability,
-      }).toList();
-      await CacheService.set(cacheKey, jsonEncode(cacheData));
-
-      setState(() {
-        _recommendations = topAps;
-        _statusMessage = 'Top ${topAps.length} recommendations ($_modeLabel).';
-      });
+      final resp = await _api.recommendAPs(lat: pos.latitude, lng: pos.longitude, radius: _radius, mode: _mode, building: _building, preferStable: _preferStable);
+      final recs = (resp['recommendations'] as List?)?.map((e) => RecommendedAp.fromJson(e as Map<String, dynamic>)).toList() ?? [];
+      await CacheService.set(ck, jsonEncode(recs.map((a) => {'id':a.id,'name':a.name,'building':a.building,'floor':a.floor,'lat':a.lat,'lng':a.lng,'distance':a.distance,'prediction':a.prediction,'confidence':a.confidence,'score':a.score,'signal_db':a.signalDb,'signal_quality':a.signalQuality,'bars':a.bars,'up_probability':a.upProbability}).toList()));
+      setState(() { _results = recs; _status = 'Top ${recs.length} recommendations ($_modeLabel).'; });
     } catch (e) {
-      setState(() {
-        _statusMessage = 'Recommendation failed: $e';
-      });
+      setState(() { _status = 'Failed: $e'; });
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      setState(() { _loading = false; });
     }
   }
-
 
   Future<void> _navigateToAp(RecommendedAp ap) async {
     try {
-      final position = await LocationService.getCurrentPosition();
-      final userLocation = LatLng(position.latitude, position.longitude);
-
-      // Check if user is near campus
-      if (!LocationService.isNearCampus(userLocation)) {
-        if (!mounted) return;
-        final startFromGate = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Outside Campus Area'),
-            content: const Text(
-              'You are currently outside the UAB campus area. '
-              'Navigation is only available from within the campus.\n\n'
-              'Would you like to start navigation from the campus main entrance instead?',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Start from Gate'),
-              ),
-            ],
-          ),
-        );
-        if (startFromGate != true) return;
-        // Navigate from campus gate
-        final gatePath = await _apiService.fetchRoute(
-          LocationService.campusGateLng,
-          LocationService.campusGateLat,
-          ap.lng,
-          ap.lat,
-        );
-        if (gatePath.isNotEmpty && mounted) {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => RoutePage(
-                path: gatePath,
-                title: 'Navigate to ${ap.name} (from Gate)',
-              ),
-            ),
-          );
-        }
+      final p = await LocationService.getCurrentPosition();
+      final pos = LatLng(p.latitude, p.longitude);
+      if (!LocationService.isNearCampus(pos)) {
+        if (!await _showGateDialog('Outside Campus', 'Navigation only available from within campus. Start from campus gate?')) return;
+        final gp = await _api.fetchRoute(LocationService.campusGateLng, LocationService.campusGateLat, ap.lng, ap.lat);
+        if (gp.isNotEmpty && mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => RoutePage(path: gp, title: 'Navigate to ${ap.name} (from Gate)')));
         return;
       }
-
-      final path = await _apiService.fetchRoute(
-        position.longitude,
-        position.latitude,
-        ap.lng,
-        ap.lat,
-      );
-      if (path.isNotEmpty && mounted) {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => RoutePage(
-              path: path,
-              title: 'Navigate to ${ap.name}',
-            ),
-          ),
-        );
-      }
+      final path = await _api.fetchRoute(p.longitude, p.latitude, ap.lng, ap.lat);
+      if (path.isNotEmpty && mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => RoutePage(path: path, title: 'Navigate to ${ap.name}')));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Navigation error: $e')),
-        );
-      }
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Navigation error: $e')));
     }
   }
 
-  /// Convert dBm to color for signal indicator
-  Color _dbmToColor(double dbm) {
-    final clamped = dbm.clamp(-97.0, -22.0);
-    final t = (clamped + 97.0) / 75.0;
-    if (t > 0.66) return Colors.green;
-    if (t > 0.33) return Colors.orange;
-    return Colors.red;
-  }
+  Color _dbmToColor(double dbm) { final t = (dbm.clamp(-97, -22) + 97) / 75; return t > 0.66 ? Colors.green : t > 0.33 ? Colors.orange : Colors.red; }
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('AP Recommendation'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Location info
-            Row(
-              children: [
-                Icon(Icons.my_location, size: 16, color: Colors.grey[600]),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    _locationLabel ?? 'Locating...',
-                    style: TextStyle(fontSize: 14, color: Colors.grey[600]),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-
-            // Mode selector
-            SizedBox(
-              width: double.infinity,
-              child: SegmentedButton<String>(
-                segments: _modeDisplay.entries.map((entry) {
-                  return ButtonSegment<String>(
-                    value: entry.key,
-                    label: Text(entry.value.label, style: const TextStyle(fontSize: 11)),
-                    icon: Icon(entry.value.icon, size: 16),
-                  );
-                }).toList(),
-                selected: {_recommendMode},
-                onSelectionChanged: (Set<String> selection) {
-                  final newMode = selection.first;
-                  setState(() {
-                    _recommendMode = newMode;
-                  });
-                  // Persist to storage (merge with existing settings)
-                  _saveModeToStorage(newMode);
-                },
-
-                showSelectedIcon: false,
-                style: ButtonStyle(
-                  visualDensity: VisualDensity.compact,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // Building selector
-            Card(
-              margin: EdgeInsets.zero,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                child: Row(
-                  children: [
-                    Icon(Icons.business, size: 18, color: Colors.grey[600]),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          value: _buildings.contains(_selectedBuilding) ? _selectedBuilding : '',
-                          isExpanded: true,
-                          hint: const Text('All Buildings', style: TextStyle(fontSize: 14)),
-                          items: [
-                            const DropdownMenuItem<String>(
-                              value: '',
-                              child: Text('All Buildings', style: TextStyle(fontSize: 14)),
-                            ),
-                            ..._buildings.map((building) => DropdownMenuItem<String>(
-                              value: building,
-                              child: Text(building, style: const TextStyle(fontSize: 14)),
-                            )),
-                          ],
-                          onChanged: (String? value) {
-                            if (value != null) {
-                              setState(() {
-                                _selectedBuilding = value;
-                              });
-                              _saveBuildingToStorage(value);
-                            }
-                          },
-                        ),
-                      ),
-                    ),
-                    if (_selectedBuilding.isNotEmpty)
-                      GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            _selectedBuilding = '';
-                          });
-                          _saveBuildingToStorage('');
-                        },
-                        child: Icon(Icons.close, size: 16, color: Colors.grey[400]),
-                      ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-
-            // Status message
-            Text(
-              _statusMessage,
-              style: const TextStyle(fontSize: 14, color: Colors.black54),
-            ),
-            const SizedBox(height: 16),
-
-            // Recommend button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _isLoading ? null : _getRecommendation,
-                icon: _isLoading
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Icon(_modeIconData),
-                label: Text(_isLoading ? 'Calculating...' : 'Find Best APs ($_modeLabel)'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  backgroundColor: _modeColor,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Recommendations list
-            Expanded(
-              child: _recommendations.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(_modeIconData, size: 64, color: Colors.grey[300]),
-                          const SizedBox(height: 16),
-                          Text(
-                            'No recommendations yet.\nTap the button above.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey[500]),
-                          ),
-                        ],
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: _recommendations.length,
-                      itemBuilder: (context, index) {
-                        final ap = _recommendations[index];
-                        final signalColor = _dbmToColor(ap.signalDb);
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 6),
-                          child: ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor: _modeColor.withValues(alpha: 0.15),
-                              child: Text(
-                                '${index + 1}',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: _modeColor,
-                                ),
-                              ),
-                            ),
-                            title: Text(
-                              ap.name,
-                              style: const TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('${ap.building} • ${ap.floor != null ? 'Floor ${ap.floor}' : 'Floor unknown'}'),
-                                const SizedBox(height: 4),
-                                Row(
-                                  children: [
-                                    // Distance
-                                    Icon(Icons.near_me, size: 12, color: Colors.grey[600]),
-                                    const SizedBox(width: 2),
-                                    Text(
-                                      '${ap.distance.toStringAsFixed(0)} m',
-                                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    // Signal
-                                    Icon(Icons.signal_wifi_4_bar, size: 12, color: signalColor),
-                                    const SizedBox(width: 2),
-                                    Text(
-                                      '${ap.signalDb.toStringAsFixed(1)} dBm',
-                                      style: TextStyle(fontSize: 11, color: signalColor),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                            trailing: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Icon(
-                                      Icons.wifi,
-                                      size: 14,
-                                      color: ap.prediction == 'Up' ? Colors.green : Colors.red,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Text(
-                                      '${(ap.score * 100).toStringAsFixed(0)}%',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: ap.prediction == 'Up' ? Colors.green : Colors.red,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '${ap.confidence.toStringAsFixed(2)} conf',
-                                  style: TextStyle(fontSize: 10, color: Colors.grey[500]),
-                                ),
-                              ],
-                            ),
-                            onTap: () => _navigateToAp(ap),
-                          ),
-                        );
-                      },
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ModeDisplay {
-  final String label;
-  final IconData icon;
-  final Color color;
-
-  const _ModeDisplay(this.label, this.icon, this.color);
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(title: const Text('AP Recommendation'), backgroundColor: Theme.of(context).colorScheme.inversePrimary),
+    body: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [Icon(Icons.my_location, size: 16, color: Colors.grey[600]), const SizedBox(width: 6), Expanded(child: Text(_locLabel ?? 'Locating...', style: TextStyle(fontSize: 14, color: Colors.grey[600])))]),
+      const SizedBox(height: 8),
+      SizedBox(width: double.infinity, child: SegmentedButton<String>(segments: _modes.entries.map((e) => ButtonSegment(value: e.key, label: Text(e.value.label, style: const TextStyle(fontSize: 11)), icon: Icon(e.value.icon, size: 16))).toList(), selected: {_mode}, onSelectionChanged: (s) { setState(() => _mode = s.first); _saveMode(s.first); }, showSelectedIcon: false, style: ButtonStyle(visualDensity: VisualDensity.compact, tapTargetSize: MaterialTapTargetSize.shrinkWrap))),
+      const SizedBox(height: 12),
+      Card(margin: EdgeInsets.zero, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), child: Row(children: [
+        Icon(Icons.business, size: 18, color: Colors.grey[600]), const SizedBox(width: 8),
+        Expanded(child: DropdownButtonHideUnderline(child: DropdownButton<String>(value: _buildings.contains(_building) ? _building : '', isExpanded: true, hint: const Text('All Buildings', style: TextStyle(fontSize: 14)), items: [const DropdownMenuItem(value: '', child: Text('All Buildings', style: TextStyle(fontSize: 14))), ..._buildings.map((b) => DropdownMenuItem(value: b, child: Text(b, style: const TextStyle(fontSize: 14))))], onChanged: (v) { if (v != null) { setState(() => _building = v); _saveBuilding(v); } }))),
+        if (_building.isNotEmpty) GestureDetector(onTap: () { setState(() => _building = ''); _saveBuilding(''); }, child: Icon(Icons.close, size: 16, color: Colors.grey[400])),
+      ]))),
+      const SizedBox(height: 12),
+      Text(_status, style: const TextStyle(fontSize: 14, color: Colors.black54)), const SizedBox(height: 16),
+      SizedBox(width: double.infinity, child: ElevatedButton.icon(
+        onPressed: _loading ? null : _getRecommendation,
+        icon: _loading ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : Icon(_modeIcon),
+        label: Text(_loading ? 'Calculating...' : 'Find Best APs ($_modeLabel)'),
+        style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), backgroundColor: _modeColor, foregroundColor: Colors.white))),
+      const SizedBox(height: 16),
+      Expanded(child: _results.isEmpty
+        ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(_modeIcon, size: 64, color: Colors.grey[300]), const SizedBox(height: 16), Text('No recommendations yet.\nTap the button above.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey[500]))]))
+        : ListView.builder(itemCount: _results.length, itemBuilder: (c, i) {
+            final a = _results[i]; final sc = _dbmToColor(a.signalDb);
+            return Card(margin: const EdgeInsets.symmetric(vertical: 6), child: ListTile(
+              leading: CircleAvatar(backgroundColor: _modeColor.withValues(alpha: 0.15), child: Text('${i+1}', style: TextStyle(fontWeight: FontWeight.bold, color: _modeColor))),
+              title: Text(a.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+              subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('${a.building} • ${a.floor != null ? 'Floor ${a.floor}' : 'Floor unknown'}'), const SizedBox(height: 4),
+                Row(children: [Icon(Icons.near_me, size: 12, color: Colors.grey[600]), const SizedBox(width: 2), Text('${a.distance.toStringAsFixed(0)} m', style: TextStyle(fontSize: 11, color: Colors.grey[600])), const SizedBox(width: 12), Icon(Icons.signal_wifi_4_bar, size: 12, color: sc), const SizedBox(width: 2), Text('${a.signalDb.toStringAsFixed(1)} dBm', style: TextStyle(fontSize: 11, color: sc))])])),
+              trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.wifi, size: 14, color: a.prediction == 'Up' ? Colors.green : Colors.red), const SizedBox(width: 4), Text('${(a.score*100).toStringAsFixed(0)}%', style: TextStyle(fontWeight: FontWeight.bold, color: a.prediction == 'Up' ? Colors.green : Colors.red))]),
+                const SizedBox(height: 2), Text('${a.confidence.toStringAsFixed(2)} conf', style: TextStyle(fontSize: 10, color: Colors.grey[500]))]),
+              onTap: () => _navigateToAp(a)));
+          })),
+  ]))));
 }

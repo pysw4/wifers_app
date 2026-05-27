@@ -1,100 +1,57 @@
-import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:latlong2/latlong.dart';
 
 class ApiService {
-  // Backend API base URL (update this after deploying the API service)
   static const String baseUrl = 'https://wifers-app-api.onrender.com';
 
-  Future<List<LatLng>> fetchRoute(double lng, double lat, double destLng, double destLat) async {
-    // Backend expects: /route/{lat}/{lng}/{dest_lat}/{dest_lng}
-    final uri = Uri.parse('$baseUrl/route/$lat/$lng/$destLat/$destLng');
+  Future<dynamic> _get(String path, [Map<String, String>? params]) async {
+    final uri = Uri.parse('$baseUrl/$path').replace(queryParameters: params);
     final response = await http.get(uri);
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final path = data['path'] as List<dynamic>;
-      return path.map<LatLng>((item) {
-        final map = item as Map<String, dynamic>;
-        final lat = map['lat'];
-        final lng = map['lng'];
-        return LatLng((lat as num).toDouble(), (lng as num).toDouble());
-      }).toList();
-    } else {
-      throw Exception('Request failed, status code: ${response.statusCode}');
-    }
+    if (response.statusCode == 200) return jsonDecode(response.body);
+    throw Exception('${response.statusCode} $path');
   }
 
-  Future<Map<String, dynamic>> predictAPStatus(Map<String, dynamic> features) async {
-    final uri = Uri.parse('$baseUrl/predict');
+  Future<dynamic> _post(String path, Map<String, dynamic> body) async {
     final response = await http.post(
-      uri,
+      Uri.parse('$baseUrl/$path'),
       headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(features),
+      body: jsonEncode(body),
     );
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('Request failed, status code: ${response.statusCode}');
-    }
+    if (response.statusCode == 200) return jsonDecode(response.body);
+    throw Exception('${response.statusCode} $path');
   }
 
-  /// Advanced route with alternatives using find_paths_to_candidates
+  Future<List<LatLng>> fetchRoute(double lng, double lat, double destLng, double destLat) async {
+    final data = await _get('route/$lat/$lng/$destLat/$destLng') as Map<String, dynamic>;
+    return (data['path'] as List)
+        .map((item) => LatLng(
+              (item['lat'] as num).toDouble(),
+              (item['lng'] as num).toDouble(),
+            ))
+        .toList();
+  }
 
-  /// Returns best path and alternative routes within acceptable range
+  Future<Map<String, dynamic>> predictAPStatus(Map<String, dynamic> features) async =>
+      await _post('predict', features) as Map<String, dynamic>;
+
   Future<Map<String, dynamic>> fetchAdvancedRoute(
-    double lng,
-    double lat,
-    double destLng,
-    double destLat, {
-    int acceptableRange = 500,
-  }) async {
-    // Backend expects: /route/advanced/{lat}/{lng}/{dest_lat}/{dest_lng}
-    final uri = Uri.parse('$baseUrl/route/advanced/$lat/$lng/$destLat/$destLng?acceptable_range=$acceptableRange');
-    final response = await http.get(uri);
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('Request failed, status code: ${response.statusCode}');
-    }
+    double lng, double lat, double destLng, double destLat, {int acceptableRange = 500}) async {
+    final q = 'acceptable_range=$acceptableRange';
+    final data = await _get('route/advanced/$lat/$lng/$destLat/$destLng?$q') as Map<String, dynamic>;
+    return data;
   }
 
-  /// Get signal strength heatmap data for ALL APs across campus
-  /// Returns merged data with both AP points and smooth grid.
-  /// Parameters:
-  ///   [hour] - hour of day (0-23, default: current hour)
-  ///   [day] - day of week ('mon'/'tue'/.../'sun', default: current day)
   Future<Map<String, dynamic>> getSignalHeatmap({int? hour, String? day}) async {
     final params = <String, String>{};
-    if (hour != null) {
-      params['hour'] = hour.toString();
-    }
-    if (day != null) {
-      params['day'] = day;
-    }
-    final uri = Uri.parse('$baseUrl/predict/signal_strength/heatmap').replace(queryParameters: params);
-    final response = await http.get(uri);
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('Request failed, status code: ${response.statusCode}');
-    }
+    if (hour != null) params['hour'] = hour.toString();
+    if (day != null) params['day'] = day;
+    return await _get('predict/signal_strength/heatmap', params) as Map<String, dynamic>;
   }
 
-  /// Get 24-hour signal strength trend for a specific AP.
-  /// Returns hourly data points with signal_db, signal_quality, and bars.
-  Future<Map<String, dynamic>> getAPDailyTrend(String apName) async {
-    final uri = Uri.parse('$baseUrl/predict/signal_strength/ap_trend/$apName');
-    final response = await http.get(uri);
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('Request failed, status code: ${response.statusCode}');
-    }
-  }
+  Future<Map<String, dynamic>> getAPDailyTrend(String apName) async =>
+      await _get('predict/signal_strength/ap_trend/$apName') as Map<String, dynamic>;
 
-  /// Fast AP recommendation using the backend graph + heatmap cache + ML model.
-  /// Returns top 5 recommended APs with scores, signal strength, and predictions.
-  /// This replaces the slow client-side recommendation logic.
   Future<Map<String, dynamic>> recommendAPs({
     required double lat,
     required double lng,
@@ -102,26 +59,9 @@ class ApiService {
     String mode = 'balanced',
     String building = '',
     bool preferStable = true,
-  }) async {
-    final uri = Uri.parse('$baseUrl/recommend');
-    final response = await http.post(
-      uri,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'lat': lat,
-        'lng': lng,
-        'radius': radius,
-        'mode': mode,
-        'building': building,
-        'prefer_stable': preferStable,
-      }),
-    );
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body) as Map<String, dynamic>;
-    } else {
-      throw Exception('Request failed, status code: ${response.statusCode}');
-    }
-  }
+  }) async =>
+      await _post('recommend', {
+        'lat': lat, 'lng': lng, 'radius': radius,
+        'mode': mode, 'building': building, 'prefer_stable': preferStable,
+      }) as Map<String, dynamic>;
 }
-
-
