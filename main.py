@@ -511,15 +511,22 @@ async def recommend_aps(request: RecommendRequest):
         ap["bars"] = quality_info["bars"]
 
         # Status prediction (Up/Down) via decision tree
+        # Model was trained on 12 features: client_count, cpu_utilization, mem_free, mem_total,
+        # last_modified, hour, mem_usage, overloaded, day_of_week, is_weekend, month, day_of_month
+        # Since /recommend doesn't have real-time AP metrics, use sensible defaults
         decision_features = [[
-            features["building_code"],
-            features["floor"],
-            features["hour"],
-            features["band"],
-            features["day_of_week"],
-            features["is_weekend"],
-            features["day_of_month"],
-            features["month"],
+            10.0,           # client_count (default)
+            50.0,           # cpu_utilization (default)
+            1000.0,         # mem_free (default)
+            2000.0,         # mem_total (default)
+            1640995200.0,   # last_modified (default)
+            features["hour"],           # hour
+            50.0,           # mem_usage (default)
+            0,              # overloaded (default)
+            features["day_of_week"],    # day_of_week
+            features["is_weekend"],     # is_weekend
+            features["day_of_month"],   # day_of_month
+            features["month"],          # month
         ]]
         status_pred = decision_model.predict(decision_features)[0]
         status_prob = decision_model.predict_proba(decision_features)[0].tolist()
