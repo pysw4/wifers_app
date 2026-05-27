@@ -13,7 +13,6 @@ class RecommendPage extends StatefulWidget {
 
   @override
   State<RecommendPage> createState() => RecommendPageState();
-
 }
 
 class RecommendedAp {
@@ -28,6 +27,9 @@ class RecommendedAp {
   final double confidence;
   final double score;
   final double signalDb;
+  final String signalQuality;
+  final int bars;
+  final double upProbability;
 
   RecommendedAp({
     required this.id,
@@ -41,12 +43,33 @@ class RecommendedAp {
     required this.confidence,
     required this.score,
     this.signalDb = -70,
+    this.signalQuality = 'Fair',
+    this.bars = 1,
+    this.upProbability = 0,
   });
+
+  factory RecommendedAp.fromJson(Map<String, dynamic> map) {
+    return RecommendedAp(
+      id: map['id'] as String? ?? '',
+      name: map['name'] as String? ?? '',
+      building: map['building'] as String? ?? 'Unknown',
+      floor: map['floor'] as int?,
+      lat: (map['lat'] as num?)?.toDouble() ?? 0.0,
+      lng: (map['lng'] as num?)?.toDouble() ?? 0.0,
+      distance: (map['distance'] as num?)?.toDouble() ?? 0.0,
+      prediction: map['prediction'] as String? ?? 'Unknown',
+      confidence: (map['confidence'] as num?)?.toDouble() ?? 0.0,
+      score: (map['score'] as num?)?.toDouble() ?? 0.0,
+      signalDb: (map['signal_db'] as num?)?.toDouble() ?? -70,
+      signalQuality: map['signal_quality'] as String? ?? 'Fair',
+      bars: map['bars'] as int? ?? 1,
+      upProbability: (map['up_probability'] as num?)?.toDouble() ?? 0.0,
+    );
+  }
 }
 
 class RecommendPageState extends State<RecommendPage> {
   final ApiService _apiService = ApiService();
-  final Distance _distanceCalculator = const Distance();
   bool _isLoading = false;
   String _statusMessage = 'Waiting for recommendation';
   String? _locationLabel;
@@ -56,9 +79,6 @@ class RecommendPageState extends State<RecommendPage> {
   List<RecommendedAp> _recommendations = [];
   List<String> _buildings = [];
   String _selectedBuilding = '';
-
-  // Cache for signal strength predictions per AP
-  final Map<String, Map<String, dynamic>> _signalCache = {};
 
   // Mode display info
   static const Map<String, _ModeDisplay> _modeDisplay = {
@@ -106,7 +126,6 @@ class RecommendPageState extends State<RecommendPage> {
   }
 
   Future<void> _loadBuildings() async {
-
     try {
       final buildings = await ApDataService.loadBuildings();
       setState(() {
@@ -143,97 +162,6 @@ class RecommendPageState extends State<RecommendPage> {
         _locationLabel = 'Location unavailable';
       });
     }
-  }
-
-  Future<List<Map<String, dynamic>>> _loadApsFromAsset() async {
-    return ApDataService.loadAllApsAsMaps();
-  }
-
-  Map<String, dynamic> _buildPredictionFeatures(Map<String, dynamic> ap, LatLng userLocation) {
-    return {
-      'client_count': 10,
-      'cpu_utilization': 50.0,
-      'mem_free': 1000.0,
-      'mem_total': 2000.0,
-      'last_modified': 1640995200.0,
-      'hour': DateTime.now().hour.toDouble(),
-      'mem_usage': 50.0,
-      'overloaded': _preferStableAps ? 0 : 1,
-    };
-  }
-
-  /// Fetch signal strength prediction for a single AP from the heatmap endpoint.
-  /// Falls back to the batch prediction if heatmap data is unavailable.
-  Future<Map<String, dynamic>> _fetchSignalForAp(Map<String, dynamic> ap) async {
-    final apName = ap['name'] as String? ?? '';
-    final apId = ap['id'] as String? ?? '';
-    final key = apName.isNotEmpty ? apName : apId;
-    if (key.isEmpty) return {'signal_db': -70, 'signal_quality': 'Fair'};
-
-    // Check cache first
-    if (_signalCache.containsKey(key)) {
-      return _signalCache[key]!;
-    }
-
-    try {
-      final heatmap = await _apiService.getSignalHeatmap();
-      final apPoints = heatmap['ap_points'] as Map<String, dynamic>?;
-      final points = apPoints?['points'] as List<dynamic>? ?? [];
-      for (final point in points) {
-        final map = point as Map<String, dynamic>;
-        final name = map['ap_name'] as String? ?? '';
-        if (name == key || name == apName) {
-          final result = {
-            'signal_db': map['signal_db'] ?? -70,
-            'signal_quality': map['signal_quality'] ?? 'Fair',
-            'bars': map['bars'] ?? 1,
-          };
-          _signalCache[key] = result;
-          return result;
-        }
-      }
-    } catch (e) {
-      debugPrint('Signal fetch failed for $key: $e');
-    }
-
-    // Fallback: return default
-    return {'signal_db': -70, 'signal_quality': 'Fair'};
-  }
-
-  /// Score an AP based on the selected recommendation mode.
-  /// Returns a score in [0, 1] range where higher = better.
-  double _scoreAp({
-    required double distance,
-    required double upProbability,
-    required double signalDb,
-  }) {
-    final distanceScore = (1.0 - (distance / _recommendRadiusMeters)).clamp(0.0, 1.0);
-    final signalScore = _dbmToNormalizedScore(signalDb);
-    final statusScore = upProbability / 100.0;
-
-    switch (_recommendMode) {
-      case 'distance':
-        // Mostly distance (80%), slight weight on signal to break ties
-        return distanceScore * 0.8 + signalScore * 0.15 + statusScore * 0.05;
-
-      case 'signal':
-        // Mostly signal strength (70%), some distance consideration
-        return signalScore * 0.7 + statusScore * 0.2 + distanceScore * 0.1;
-
-      case 'balanced':
-      default:
-        // Even weighted mix
-        final stabilityWeight = _preferStableAps ? 0.4 : 0.25;
-        return statusScore * stabilityWeight +
-            distanceScore * (0.5 - stabilityWeight * 0.3) +
-            signalScore * (0.5 - stabilityWeight * 0.2);
-    }
-  }
-
-  /// Convert dBm to a normalized score [0, 1].
-  /// -97 dBm (weakest) → 0.0, -22 dBm (strongest) → 1.0
-  double _dbmToNormalizedScore(double dbm) {
-    return ((dbm.clamp(-97.0, -22.0) + 97.0) / 75.0).clamp(0.0, 1.0);
   }
 
   Future<void> _getRecommendation() async {
@@ -335,20 +263,7 @@ class RecommendPageState extends State<RecommendPage> {
       if (cachedResult != null) {
         final decoded = jsonDecode(cachedResult) as List<dynamic>;
         final cachedAps = decoded.map((item) {
-          final map = item as Map<String, dynamic>;
-          return RecommendedAp(
-            id: map['id'] as String,
-            name: map['name'] as String,
-            building: map['building'] as String,
-            floor: map['floor'] as int?,
-            lat: (map['lat'] as num).toDouble(),
-            lng: (map['lng'] as num).toDouble(),
-            distance: (map['distance'] as num).toDouble(),
-            prediction: map['prediction'] as String,
-            confidence: (map['confidence'] as num).toDouble(),
-            score: (map['score'] as num).toDouble(),
-            signalDb: (map['signal_db'] as num?)?.toDouble() ?? -70,
-          );
+          return RecommendedAp.fromJson(item as Map<String, dynamic>);
         }).toList();
 
         setState(() {
@@ -358,80 +273,20 @@ class RecommendPageState extends State<RecommendPage> {
         return;
       }
 
-      final allAps = await _loadApsFromAsset();
-      final nearbyAps = allAps.map((ap) {
-        final distance = _distanceCalculator.as(
-          LengthUnit.Meter,
-          userLocation,
-          LatLng(ap['lat'] as double, ap['lng'] as double),
-        );
-        return {...ap, 'distance': distance};
-      }).where((ap) {
-        final withinRadius = (ap['distance'] as double) <= _recommendRadiusMeters;
-        final matchesBuilding = _selectedBuilding.isEmpty || ap['building'] == _selectedBuilding;
-        return withinRadius && matchesBuilding;
-      }).toList();
+      // Use the new backend /recommend API (fast: graph + heatmap cache + ML model)
+      final response = await _apiService.recommendAPs(
+        lat: userLocation.latitude,
+        lng: userLocation.longitude,
+        radius: _recommendRadiusMeters,
+        mode: _recommendMode,
+        building: _selectedBuilding,
+        preferStable: _preferStableAps,
+      );
 
-      if (nearbyAps.isEmpty) {
-        setState(() {
-          _statusMessage = 'No APs found within $_recommendRadiusMeters meters.';
-          _isLoading = false;
-        });
-        return;
-      }
-
-      // Sort by distance first, take top 100 for prediction
-      nearbyAps.sort((a, b) => (a['distance'] as double).compareTo(b['distance'] as double));
-      final selectedAps = nearbyAps.take(100).toList();
-
-      // Batch predict AP status
-      final featureBatch = selectedAps.map((ap) => _buildPredictionFeatures(ap, userLocation)).toList();
-      final predictionResponse = await _apiService.predictAPStatusBatch(featureBatch);
-      final predictions = predictionResponse['predictions'] as List<dynamic>;
-
-      // Fetch signal strengths for all selected APs
-      final signalResults = <Map<String, dynamic>>[];
-      for (final ap in selectedAps) {
-        signalResults.add(await _fetchSignalForAp(ap));
-      }
-
-      final scoredAps = <RecommendedAp>[];
-      for (var i = 0; i < selectedAps.length; i++) {
-        final ap = selectedAps[i];
-        final predictionInfo = predictions[i] as Map<String, dynamic>;
-        final prediction = predictionInfo['prediction'] as String? ?? 'Unknown';
-        final confidence = (predictionInfo['confidence'] as num?)?.toDouble() ?? 0.0;
-        final upProbability = (predictionInfo['up_probability'] as num?)?.toDouble() ?? 0.0;
-        final distance = ap['distance'] as double;
-
-        // Get signal data (either from heatmap or fallback)
-        final signalData = i < signalResults.length ? signalResults[i] : <String, dynamic>{};
-        final signalDb = (signalData['signal_db'] as num?)?.toDouble() ?? -70;
-
-        // Score based on selected mode
-        final score = _scoreAp(
-          distance: distance,
-          upProbability: upProbability,
-          signalDb: signalDb,
-        );
-
-        scoredAps.add(RecommendedAp(
-          id: ap['id'] as String,
-          name: ap['name'] as String,
-          building: ap['building'] as String,
-          floor: ap['floor'] as int?,
-          lat: ap['lat'] as double,
-          lng: ap['lng'] as double,
-          distance: distance,
-          prediction: prediction,
-          confidence: confidence,
-          score: score,
-          signalDb: signalDb,
-        ));
-      }
-
-      scoredAps.sort((a, b) => b.score.compareTo(a.score));
-      final topAps = scoredAps.take(5).toList();
+      final recommendations = response['recommendations'] as List<dynamic>? ?? [];
+      final topAps = recommendations
+          .map((item) => RecommendedAp.fromJson(item as Map<String, dynamic>))
+          .toList();
 
       // Save to cache
       final cacheData = topAps.map((ap) => {
@@ -446,6 +301,9 @@ class RecommendPageState extends State<RecommendPage> {
         'confidence': ap.confidence,
         'score': ap.score,
         'signal_db': ap.signalDb,
+        'signal_quality': ap.signalQuality,
+        'bars': ap.bars,
+        'up_probability': ap.upProbability,
       }).toList();
       await CacheService.set(cacheKey, jsonEncode(cacheData));
 
@@ -463,6 +321,7 @@ class RecommendPageState extends State<RecommendPage> {
       });
     }
   }
+
 
   Future<void> _navigateToAp(RecommendedAp ap) async {
     try {

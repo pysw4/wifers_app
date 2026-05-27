@@ -104,5 +104,37 @@ class ApiService {
       throw Exception('Request failed, status code: ${response.statusCode}');
     }
   }
+
+  /// Fast AP recommendation using the backend graph + heatmap cache + ML model.
+  /// Returns top 5 recommended APs with scores, signal strength, and predictions.
+  /// This replaces the slow client-side recommendation logic.
+  Future<Map<String, dynamic>> recommendAPs({
+    required double lat,
+    required double lng,
+    int radius = 500,
+    String mode = 'balanced',
+    String building = '',
+    bool preferStable = true,
+  }) async {
+    final uri = Uri.parse('$baseUrl/recommend');
+    final response = await http.post(
+      uri,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({
+        'lat': lat,
+        'lng': lng,
+        'radius': radius,
+        'mode': mode,
+        'building': building,
+        'prefer_stable': preferStable,
+      }),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    } else {
+      throw Exception('Request failed, status code: ${response.statusCode}');
+    }
+  }
 }
+
 

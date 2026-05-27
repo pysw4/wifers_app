@@ -8,6 +8,8 @@ import joblib
 from pathlib import Path
 import osmnx as ox
 from helper_script import add_aps_to_graph, find_paths_to_candidates, find_qualified_in_range
+
+
 import os
 import json
 import logging
@@ -253,14 +255,208 @@ def predict_ap_status_batch(items: list[dict]):
     return {'predictions': predictions, 'count': len(predictions)}
 
 
-@app.get("/recommend/{lat}/{lng}/{radius}/{min_range}/{max_range}")
-def recommend(lng: float, lat: float, radius: int, min_range: float, max_range: float):
-    return {
-        "message": "Historical AP candidate recommendation is disabled. Use /predict or /predict/batch with current AP feature vectors.",
-        "current_location": {"lat": lat, "lng": lng},
-        "radius": radius,
-        "range": {"min": min_range, "max": max_range}
+@app.post("/recommend")
+def recommend_aps(body: dict):
+    """
+    Fast AP recommendation using graph + heatmap cache + ML model.
+    
+    Request body:
+    {
+        "lat": 41.500,          // User latitude
+        "lng": 2.111,           // User longitude
+        "radius": 500,          // Search radius in meters
+        "mode": "balanced",     // "distance" | "signal" | "balanced"
+        "building": "",         // Optional building filter
+        "prefer_stable": true   // Prefer stable APs
     }
+    
+    Returns top 5 recommended APs with scores, signal strength, and predictions.
+    """
+    if G is None:
+        raise HTTPException(status_code=503, detail="Graph not loaded yet")
+    if not ml_model:
+        raise HTTPException(status_code=503, detail="ML model not loaded yet")
+    
+    lat = body.get("lat")
+    lng = body.get("lng")
+    radius = body.get("radius", 500)
+    mode = body.get("mode", "balanced")
+    building_filter = body.get("building", "")
+    prefer_stable = body.get("prefer_stable", True)
+    
+    if lat is None or lng is None:
+        raise HTTPException(status_code=422, detail="lat and lng are required")
+    
+    from datetime import datetime
+    now = datetime.now()
+    current_hour = now.hour
+    current_day = now.weekday()  # 0=Mon
+    
+    try:
+        # 1. Find nearest road node to user
+        source_node = int(ox.distance.nearest_nodes(G_road, lng, lat))
+        logger.info(f"Recommend: user at ({lat}, {lng}), nearest road node={source_node}")
+        
+        # 2. Find qualified nodes within radius
+        qualified = find_qualified_in_range(G, source_node, acceptable_range=radius)
+        if not qualified:
+            return {"recommendations": [], "message": f"No reachable nodes within {radius}m"}
+        
+        # 3. For each qualified node, find the nearest AP by Euclidean distance
+        #    (find_ap_near_candidates requires 'height' attribute which road nodes don't have)
+        ap_distances = {}  # {ap_name: {distance, lat, lng, building, floor}}
+        for candidate in qualified:
+            candidate_data = G.nodes[candidate]
+            cx, cy = candidate_data.get("x"), candidate_data.get("y")
+            if cx is None or cy is None:
+                continue
+            
+            # Find nearest AP by Euclidean distance
+            best_ap = None
+            best_euclidean = float('inf')
+            for ap_name in G_AP_nodes:
+                ap_data = G.nodes[ap_name]
+                ax, ay = ap_data.get("x"), ap_data.get("y")
+                if ax is None or ay is None:
+                    continue
+                ed = ((ax - cx)**2 + (ay - cy)**2) ** 0.5
+                if ed < best_euclidean:
+                    best_euclidean = ed
+                    best_ap = ap_name
+            
+            if best_ap and best_ap not in ap_distances:
+                # Get walking distance from source to candidate
+                try:
+                    dist = nx.dijkstra_path_length(G, source=source_node, target=candidate, weight='length')
+                except (nx.NetworkXNoPath, Exception):
+                    dist = radius  # fallback
+                
+                node_data = G.nodes[best_ap]
+                ap_distances[best_ap] = {
+                    "distance": dist,
+                    "lat": node_data.get("y", 0),
+                    "lng": node_data.get("x", 0),
+                    "building": node_data.get("building", "Unknown"),
+                    "floor": node_data.get("height", 0),
+                }
+
+        
+        if not ap_distances:
+            return {"recommendations": [], "message": "No APs found near reachable nodes"}
+        
+        # 5. Apply building filter
+        if building_filter:
+            ap_distances = {k: v for k, v in ap_distances.items() if v["building"] == building_filter}
+            if not ap_distances:
+                return {"recommendations": [], "message": f"No APs found in building '{building_filter}'"}
+        
+        # 6. Get signal strength from heatmap cache (milliseconds, no extra API calls)
+        try:
+            heatmap_data = _load_precomputed_heatmap(current_hour)
+            ap_points = heatmap_data.get("ap_points", {})
+            points = ap_points.get("points", [])
+            signal_map = {}  # {ap_name: {signal_db, signal_quality, bars}}
+            for point in points:
+                name = point.get("ap_name")
+                if name:
+                    signal_map[name] = {
+                        "signal_db": point.get("signal_db", -70),
+                        "signal_quality": point.get("signal_quality", "Fair"),
+                        "bars": point.get("bars", 1),
+                    }
+        except Exception:
+            signal_map = {}
+        
+        # 7. Batch predict AP status using ML model
+        feature_batch = []
+        ap_names = list(ap_distances.keys())
+        for ap_name in ap_names:
+            feature_batch.append({
+                "client_count": 10,
+                "cpu_utilization": 50.0,
+                "mem_free": 1000.0,
+                "mem_total": 2000.0,
+                "last_modified": 1640995200.0,
+                "hour": float(current_hour),
+                "mem_usage": 50.0,
+                "overloaded": 0 if prefer_stable else 1,
+                "day_of_week": float(current_day),
+                "is_weekend": 1 if current_day >= 5 else 0,
+                "month": float(now.month),
+                "day_of_month": float(now.day),
+            })
+        
+        predictions = []
+        for features in feature_batch:
+            df = _build_feature_dataframe(features)
+            pred = ml_model.predict(df)[0]
+            proba = ml_model.predict_proba(df)[0]
+            up_prob = _up_probability_from_proba(proba)
+            predictions.append({
+                "prediction": _to_prediction_label(pred),
+                "confidence": round(float(max(proba)), 3),
+                "up_probability": round(up_prob * 100, 1),
+            })
+        
+        # 8. Score and rank APs
+        scored_aps = []
+        for i, ap_name in enumerate(ap_names):
+            info = ap_distances[ap_name]
+            pred_info = predictions[i]
+            signal = signal_map.get(ap_name, {"signal_db": -70, "signal_quality": "Fair", "bars": 1})
+            
+            distance = info["distance"]
+            signal_db = signal["signal_db"]
+            up_probability = pred_info["up_probability"]
+            
+            # Calculate scores (same logic as Flutter frontend)
+            distance_score = max(0.0, 1.0 - (distance / radius))
+            signal_score = max(0.0, min(1.0, (signal_db + 97.0) / 75.0))
+            status_score = up_probability / 100.0
+            
+            if mode == "distance":
+                score = distance_score * 0.8 + signal_score * 0.15 + status_score * 0.05
+            elif mode == "signal":
+                score = signal_score * 0.7 + status_score * 0.2 + distance_score * 0.1
+            else:  # balanced
+                stability_weight = 0.4 if prefer_stable else 0.25
+                score = (status_score * stability_weight +
+                        distance_score * (0.5 - stability_weight * 0.3) +
+                        signal_score * (0.5 - stability_weight * 0.2))
+            
+            scored_aps.append({
+                "id": ap_name,
+                "name": ap_name,
+                "building": info["building"],
+                "floor": info["floor"],
+                "lat": info["lat"],
+                "lng": info["lng"],
+                "distance": round(distance, 1),
+                "prediction": pred_info["prediction"],
+                "confidence": pred_info["confidence"],
+                "up_probability": pred_info["up_probability"],
+                "score": round(score, 4),
+                "signal_db": signal_db,
+                "signal_quality": signal["signal_quality"],
+                "bars": signal["bars"],
+            })
+        
+        # Sort by score descending, return top 5
+        scored_aps.sort(key=lambda x: x["score"], reverse=True)
+        top_aps = scored_aps[:5]
+        
+        return {
+            "recommendations": top_aps,
+            "count": len(top_aps),
+            "total_candidates": len(scored_aps),
+            "mode": mode,
+            "message": f"Top {len(top_aps)} recommendations"
+        }
+        
+    except Exception as e:
+        logger.error(f"Recommend error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Recommendation failed: {str(e)}")
+
 
 
 @app.get("/route/{lat}/{lng}/{dest_lat}/{dest_lng}")
