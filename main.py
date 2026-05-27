@@ -13,6 +13,8 @@ from helper_script import add_aps_to_graph, find_paths_to_candidates, find_quali
 import os
 import json
 import logging
+from collections import OrderedDict
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -108,9 +110,11 @@ def init_graph(force: bool = False):
     
     # Create subgraph containing only road nodes (integer nodes) for nearest_nodes queries
     # This ensures ox.distance.nearest_nodes never returns AP string nodes
+    # Use subgraph VIEW (no .copy()) to avoid duplicating data in memory
     road_nodes = [n for n in G.nodes() if not isinstance(n, str)]
-    G_road = G.subgraph(road_nodes).copy()
-    logger.info(f"Created road subgraph with {len(G_road.nodes())} nodes")
+    G_road = G.subgraph(road_nodes)  # View, not copy — saves ~80MB RAM
+    logger.info(f"Created road subgraph view with {len(G_road.nodes())} nodes")
+
     
     logger.info("Adding AP nodes to graph...")
     G_AP_nodes = add_aps_to_graph(G, bbox=[UAB_bbox[3], UAB_bbox[0], UAB_bbox[2], UAB_bbox[1]])
@@ -710,7 +714,9 @@ PRECOMPUTED_DIR = BASE_DIR / 'precomputed'
 DAY_NAMES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 
 # In-memory cache for precomputed heatmap data
-_heatmap_cache: dict = {}
+# LRU cache: max 10 entries to limit memory usage (~10-30MB instead of unlimited)
+HEATMAP_CACHE_MAX_SIZE = 10
+_heatmap_cache: OrderedDict = OrderedDict()
 
 
 def _get_day_name() -> str:
@@ -721,19 +727,30 @@ def _get_day_name() -> str:
 
 
 def _load_precomputed_heatmap(hour: int, day_name: str = None) -> dict:
-    """Load heatmap data from precomputed file for a specific day + hour"""
+    """Load heatmap data from precomputed file for a specific day + hour.
+    
+    Uses LRU cache with max HEATMAP_CACHE_MAX_SIZE entries to limit memory usage.
+    """
     if day_name is None:
         day_name = _get_day_name()
     cache_key = f'{day_name}_{hour}'
     
     if cache_key not in _heatmap_cache:
+        # Enforce LRU limit: evict oldest entry if at capacity
+        while len(_heatmap_cache) >= HEATMAP_CACHE_MAX_SIZE:
+            _heatmap_cache.popitem(last=False)
+        
         filepath = PRECOMPUTED_DIR / day_name / f'heatmap_h{hour}.json'
         if not filepath.exists():
             raise HTTPException(status_code=500, detail=f"Precomputed heatmap not found for {day_name}/hour {hour}")
         with open(filepath) as f:
             import json
             _heatmap_cache[cache_key] = json.load(f)
+    else:
+        # Move to end (most recently used)
+        _heatmap_cache.move_to_end(cache_key)
     return _heatmap_cache[cache_key]
+
 
 
 @app.get("/predict/signal_strength/heatmap")
@@ -769,47 +786,53 @@ def list_available_buildings():
     }
 
 
-# Trend data cache: {ap_name: {day_type: {hour: data}}}
-_trend_cache: dict = {}
+# Trend data cache: {ap_name: {hour: data}}
+# Built on-demand per AP query, not pre-loaded for all APs (saves ~80MB RAM)
 TREND_CACHE_TTL = 300  # 5 minute cache
 
 
-def _build_ap_index() -> dict:
-    """Build index mapping AP names to all hourly data, speeding up trend queries"""
-    index: dict = {}
+def _get_ap_trend_data(ap_name: str, day_name: str = None) -> list:
+    """Get 24-hour trend data for a specific AP by reading heatmap files on demand.
+    
+    Only loads the heatmap files for the current day (24 files max),
+    instead of building a full index of all APs (168 files).
+    Saves ~80MB RAM compared to _build_ap_index().
+    """
+    if day_name is None:
+        day_name = _get_day_name()
+    
+    trend_data = []
     for hour in range(24):
         try:
-            data = _load_precomputed_heatmap(hour)
+            data = _load_precomputed_heatmap(hour, day_name)
             ap_points = data.get("ap_points", {})
             points = ap_points.get("points", [])
+            found = False
             for point in points:
-                ap_name = point.get("ap_name")
-                if ap_name:
-                    if ap_name not in index:
-                        index[ap_name] = {}
-                    index[ap_name][hour] = {
+                if point.get("ap_name") == ap_name:
+                    trend_data.append({
+                        "hour": hour,
                         "signal_db": point["signal_db"],
                         "signal_quality": point["signal_quality"],
                         "bars": point["bars"],
-                    }
+                    })
+                    found = True
+                    break
+            if not found:
+                trend_data.append({
+                    "hour": hour,
+                    "signal_db": None,
+                    "signal_quality": None,
+                    "bars": None,
+                })
         except Exception:
-            pass
-    return index
-
-
-_ap_index_cache: dict = {}
-_ap_index_timestamp: float = 0
-
-
-def _get_ap_index() -> dict:
-    """Get AP index (with caching)"""
-    global _ap_index_cache, _ap_index_timestamp
-    now = __import__('time').time()
-    if not _ap_index_cache or (now - _ap_index_timestamp) > TREND_CACHE_TTL:
-        _ap_index_cache = _build_ap_index()
-        _ap_index_timestamp = now
-        logger.info(f"Built AP index with {len(_ap_index_cache)} APs")
-    return _ap_index_cache
+            trend_data.append({
+                "hour": hour,
+                "signal_db": None,
+                "signal_quality": None,
+                "bars": None,
+            })
+    return trend_data
 
 
 @app.get("/predict/signal_strength/ap_trend/{ap_name}")
@@ -817,29 +840,13 @@ def get_ap_daily_trend(ap_name: str):
     """
     Get the 24-hour signal strength trend for a specific AP.
     
-    Uses the pre-built AP index for fast queries, supports weekday/weekend switching.
+    Reads heatmap files on-demand (only current day, 24 files max).
     Returns 24 data points (one per hour), including signal_db, signal_quality, and bars.
     """
     from urllib.parse import unquote
     ap_name = unquote(ap_name)
     
-    index = _get_ap_index()
-    ap_data = index.get(ap_name, {})
-    
-    trend_data = []
-    for hour in range(24):
-        if hour in ap_data:
-            trend_data.append({
-                "hour": hour,
-                **ap_data[hour],
-            })
-        else:
-            trend_data.append({
-                "hour": hour,
-                "signal_db": None,
-                "signal_quality": None,
-                "bars": None,
-            })
+    trend_data = _get_ap_trend_data(ap_name)
     
     # Calculate statistics
     valid_signals = [d["signal_db"] for d in trend_data if d["signal_db"] is not None]
@@ -855,7 +862,7 @@ def get_ap_daily_trend(ap_name: str):
     
     return {
         "ap_name": ap_name,
-        "day_type": _get_day_type(),
+        "day_type": _get_day_name(),
         "trend": trend_data,
         "total_hours": len(trend_data),
         "stats": stats,
@@ -870,34 +877,11 @@ def get_ap_trend_compare(ap_name: str):
     from urllib.parse import unquote
     ap_name = unquote(ap_name)
     
-    # Temporarily switch day_type to load weekend data
-    global _heatmap_cache
-    original_cache = dict(_heatmap_cache)
-    
     results = {}
     for day_type in ['weekday', 'weekend']:
-        # Clear cache to force reload
-        _heatmap_cache = {k: v for k, v in original_cache.items() if k.startswith(day_type)}
+        trend_data = _get_ap_trend_data(ap_name, day_type)
         
-        index = _get_ap_index()
-        ap_data = index.get(ap_name, {})
-        
-        trend = []
-        for hour in range(24):
-            if hour in ap_data:
-                trend.append({
-                    "hour": hour,
-                    **ap_data[hour],
-                })
-            else:
-                trend.append({
-                    "hour": hour,
-                    "signal_db": None,
-                    "signal_quality": None,
-                    "bars": None,
-                })
-        
-        valid_signals = [d["signal_db"] for d in trend if d["signal_db"] is not None]
+        valid_signals = [d["signal_db"] for d in trend_data if d["signal_db"] is not None]
         stats = {}
         if valid_signals:
             stats = {
@@ -907,18 +891,16 @@ def get_ap_trend_compare(ap_name: str):
             }
         
         results[day_type] = {
-            "trend": trend,
+            "trend": trend_data,
             "stats": stats,
         }
-    
-    # Restore cache
-    _heatmap_cache = original_cache
     
     return {
         "ap_name": ap_name,
         "weekday": results["weekday"],
         "weekend": results["weekend"],
     }
+
 
 
 @app.get("/cache/status")
