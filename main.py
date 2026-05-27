@@ -306,7 +306,7 @@ def recommend_aps(body: dict):
     
     Returns top 5 recommended APs with scores, signal strength, and predictions.
     """
-    if G is None:
+    if G is None or G_road is None:
         raise HTTPException(status_code=503, detail="Graph not loaded yet")
     if not ml_model:
         raise HTTPException(status_code=503, detail="ML model not loaded yet")
