@@ -1,4 +1,4 @@
-# Miscellaneous
+Miscellaneous
 *.class
 *.log
 *.pyc
@@ -49,10 +49,6 @@ app.*.map.json
 cache/
 results/
 .venv/
-# precomputed/  # 取消注释以排除预计算数据（Render 部署需要此数据）
-
-
-
 
 # Old/unused scripts (replaced by retrain_classifier.py)
 predictor2_0.py
@@ -60,7 +56,4 @@ train_signal_model.py
 train_signal_model_v2.py
 
 # Deployment config
-# requirements.txt
-# render.yaml
 description.txt
-# geolocation_package/  # 取消注释以排除地理数据包precomputed/
