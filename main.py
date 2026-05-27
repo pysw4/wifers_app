@@ -10,6 +10,7 @@ vectorized ML predictions, and reduced Dijkstra recomputation.
 # ---------------------------------------------------------------------------
 import json
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime
 from functools import lru_cache
@@ -92,6 +93,16 @@ _ap_name_to_data: Optional[dict] = None
 async def lifespan(app: FastAPI):
     """Initialise graph, ML model, and preload current-hour heatmap."""
     global _initialized
+    print("=" * 60)
+    print("[BOOT] WiFers API starting up …")
+    print(f"[BOOT] BASE_DIR = {BASE_DIR}")
+    print(f"[BOOT] PRECOMPUTED_DIR = {PRECOMPUTED_DIR}")
+    print(f"[BOOT] PRECOMPUTED_DIR exists = {PRECOMPUTED_DIR.exists()}")
+    if PRECOMPUTED_DIR.exists():
+        print(f"[BOOT] precomputed subdirs: {[p.name for p in PRECOMPUTED_DIR.iterdir()]}")
+    print(f"[BOOT] PRIMARY_MODEL_PATH exists = {PRIMARY_MODEL_PATH.exists()}")
+    print(f"[BOOT] FALLBACK_MODEL_PATH exists = {FALLBACK_MODEL_PATH.exists()}")
+    print("=" * 60)
     try:
         logger.info("Initializing application resources …")
         load_ml_model()
@@ -102,19 +113,29 @@ async def lifespan(app: FastAPI):
             _initialized = True
         except Exception as exc:
             logger.error("Failed to load graph: %s", exc)
+            print(f"[BOOT] ❌ Graph load FAILED: {exc}")
+            traceback.print_exc()
             logger.warning("Graph routing will be unavailable until the graph is loaded")
             _initialized = False
 
         try:
-            _get_hourly_data(datetime.now().hour)  # pre-warm cache via _get_hourly_data
+            now = datetime.now()
+            print(f"[BOOT] Preloading heatmap for hour={now.hour}, day={_current_day_name()}")
+            _get_hourly_data(now.hour)  # pre-warm cache via _get_hourly_data
             logger.info("Preloaded heatmap for current hour")
         except Exception as exc:
             logger.warning("Failed to preload heatmap: %s", exc)
+            print(f"[BOOT] ⚠️ Heatmap preload FAILED: {exc}")
+            traceback.print_exc()
 
     except Exception as exc:
         logger.error("Startup initialisation failed: %s", exc)
+        print(f"[BOOT] ❌ Startup FAILED: {exc}")
+        traceback.print_exc()
         _initialized = False
 
+    print(f"[BOOT] ✅ Startup complete. _initialized={_initialized}")
+    print("=" * 60)
     yield  # app running
     logger.info("Shutting down …")
 
@@ -238,11 +259,18 @@ def _load_hourly_file(day_name: str, file_hour: int) -> dict:
     evicts least-recently-used entries.
     """
     filepath = PRECOMPUTED_DIR / day_name / f"heatmap_h{file_hour}.json"
+    print(f"[DEBUG] _load_hourly_file: looking for {filepath}")
     if not filepath.exists():
-        raise HTTPException(status_code=500, detail=f"Heatmap not found: {filepath}")
+        print(f"[DEBUG] ❌ Heatmap file NOT FOUND: {filepath}")
+        print(f"[DEBUG]    PRECOMPUTED_DIR exists: {PRECOMPUTED_DIR.exists()}")
+        if PRECOMPUTED_DIR.exists():
+            print(f"[DEBUG]    Contents: {[p.name for p in PRECOMPUTED_DIR.iterdir()]}")
+        raise FileNotFoundError(f"Heatmap not found: {filepath}")
     logger.info("Loading heatmap: %s", filepath)
     with open(filepath, encoding="utf-8") as fh:
-        return json.load(fh)
+        data = json.load(fh)
+    print(f"[DEBUG] ✅ Heatmap loaded: {len(data.get('ap_points', {}).get('points', []))} APs")
+    return data
 
 
 def _get_hourly_data(hour: int, day_name: Optional[str] = None) -> dict:
@@ -450,10 +478,12 @@ def recommend_aps(body: dict):
     try:
         # 1. Nearest road node
         source_node = int(ox.distance.nearest_nodes(G_road, lng, lat))
+        print(f"[RECOMMEND] 1️⃣ nearest_nodes → source_node={source_node}")
         logger.info("Recommend: user=(%.5f, %.5f) → source_node=%d", lat, lng, source_node)
 
         # 2. Qualified nodes within radius (single-source Dijkstra → reuse distances below)
         qualified = find_qualified_in_range(G, source_node, acceptable_range=radius)
+        print(f"[RECOMMEND] 2️⃣ qualified nodes: {len(qualified)}")
         if not qualified:
             return {"recommendations": [], "message": f"No reachable nodes within {radius}m"}
 
@@ -475,12 +505,14 @@ def recommend_aps(body: dict):
                 d = radius
             candidate_distances[node] = d
 
+        print(f"[RECOMMEND] 2b️⃣ valid_qualified: {len(valid_qualified)}")
         if not valid_qualified:
             return {"recommendations": [], "message": "No reachable nodes with coordinates"}
 
         # 3. Batch KD-Tree: nearest AP for each qualified node
         kd_distances, kd_indices = _ap_kdtree.query(qualified_coords, k=1)
         ap_name_list = list(_ap_name_to_data.keys())
+        print(f"[RECOMMEND] 3️⃣ KD-Tree: {len(kd_indices)} queries, {len(ap_name_list)} APs in index")
 
         ap_info_map: dict = {}  # {ap_name: {distance, lat, lng, building, floor}}
         for i, candidate in enumerate(valid_qualified):
@@ -497,12 +529,14 @@ def recommend_aps(body: dict):
                 "floor": info["floor"],
             }
 
+        print(f"[RECOMMEND] 3b️⃣ unique APs found: {len(ap_info_map)}")
         if not ap_info_map:
             return {"recommendations": [], "message": "No APs near reachable nodes"}
 
         # 4. Building filter
         if building_filter:
             ap_info_map = {k: v for k, v in ap_info_map.items() if v["building"] == building_filter}
+            print(f"[RECOMMEND] 4️⃣ after building filter '{building_filter}': {len(ap_info_map)} APs")
             if not ap_info_map:
                 return {"recommendations": [], "message": f"No APs in building '{building_filter}'"}
 
@@ -518,7 +552,10 @@ def recommend_aps(body: dict):
                         "signal_quality": pt.get("signal_quality", "Fair"),
                         "bars": pt.get("bars", 1),
                     }
-        except Exception:
+            print(f"[RECOMMEND] 5️⃣ signal_map: {len(signal_map)} APs from heatmap")
+        except Exception as exc:
+            print(f"[RECOMMEND] 5️⃣ ❌ heatmap load failed: {exc}")
+            traceback.print_exc()
             signal_map = {}
 
         # 6. Signal strength from heatmap (per-AP, based on current hour/day)
