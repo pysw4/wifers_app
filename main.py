@@ -398,17 +398,25 @@ async def get_ap_daily_trend(ap_name: str):
 async def recommend_aps(request: RecommendRequest):
     """
     Recommend nearby APs based on location, signal strength, and preferences.
-    Uses pre-computed heatmap data for signal predictions.
+    Uses the signal strength model for predictions.
+
+    Returns fields compatible with the Flutter RecommendPage:
+      - recommendations: list of APs with id, name, building, floor, lat, lng,
+        distance, prediction (Up/Down via decision tree), confidence, score,
+        signal_db, signal_quality, bars, up_probability
     """
     try:
         geojson = _load_geojson()
-        model = _load_signal_strength_model()
+        signal_model = _load_signal_strength_model()
+        decision_model = _load_decision_tree()
     except FileNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
     # Get current hour and day for signal lookup
     current_hour = time.localtime().tm_hour
     current_day = time.localtime().tm_wday  # 0=Mon, 6=Sun
+    current_day_of_month = float(time.localtime().tm_mday)
+    current_month = float(time.localtime().tm_mon)
 
     # Find nearby APs
     nearby_aps = []
@@ -429,36 +437,61 @@ async def recommend_aps(request: RecommendRequest):
         if request.building and request.building.lower() not in building.lower():
             continue
 
+        ap_name = props.get("USER_NOM_A", "Unknown")
+        ap_id = props.get("USER_ID", ap_name)  # Use USER_ID if available, fallback to name
+        floor = float(props.get("Num_Planta", 0) or 0)
+
         nearby_aps.append({
+            "id": ap_id,
+            "name": ap_name,
             "lat": ap_lat,
             "lng": ap_lng,
             "building": building,
-            "floor": float(props.get("Num_Planta", 0) or 0),
-            "ap_name": props.get("USER_NOM_A", "Unknown"),
+            "floor": int(floor),
             "distance": round(distance, 1),
         })
 
     if not nearby_aps:
-        return {"results": [], "message": "No APs found in the specified area"}
+        return {"recommendations": [], "message": "No APs found in the specified area"}
 
-    # Predict signal strength for each nearby AP
+    # Predict signal strength and status for each nearby AP
     for ap in nearby_aps:
         building_code = _encode_building(ap["building"])
-        features_df = pd.DataFrame([{
+        features = {
             "building_code": building_code,
-            "floor": ap["floor"],
+            "floor": float(ap["floor"]),
             "hour": float(current_hour),
             "band": 5.0,
             "day_of_week": float(current_day),
             "is_weekend": 1.0 if current_day >= 5 else 0.0,
-            "day_of_month": float(time.localtime().tm_mday),
-            "month": float(time.localtime().tm_mon),
-        }])
-        signal_db = float(model.predict(features_df)[0])
+            "day_of_month": current_day_of_month,
+            "month": current_month,
+        }
+
+        # Signal strength prediction
+        features_df = pd.DataFrame([features])
+        signal_db = float(signal_model.predict(features_df)[0])
         quality_info = _dbm_to_quality(signal_db)
         ap["signal_db"] = round(signal_db, 1)
         ap["signal_quality"] = quality_info["quality"]
         ap["bars"] = quality_info["bars"]
+
+        # Status prediction (Up/Down) via decision tree
+        decision_features = [[
+            features["building_code"],
+            features["floor"],
+            features["hour"],
+            features["band"],
+            features["day_of_week"],
+            features["is_weekend"],
+            features["day_of_month"],
+            features["month"],
+        ]]
+        status_pred = decision_model.predict(decision_features)[0]
+        status_prob = decision_model.predict_proba(decision_features)[0].tolist()
+        ap["prediction"] = "Up" if status_pred == 1 else "Down"
+        ap["confidence"] = round(max(status_prob), 3)
+        ap["up_probability"] = round(status_prob[1] if len(status_prob) > 1 else status_prob[0], 3)
 
     # Score and rank APs based on mode
     for ap in nearby_aps:
@@ -478,7 +511,7 @@ async def recommend_aps(request: RecommendRequest):
     nearby_aps.sort(key=lambda x: x["score"], reverse=True)
 
     return {
-        "results": nearby_aps[:20],  # Top 20
+        "recommendations": nearby_aps[:20],  # Top 20
         "total_found": len(nearby_aps),
         "mode": request.mode,
         "radius": request.radius,
