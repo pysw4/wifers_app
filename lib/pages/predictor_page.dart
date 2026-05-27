@@ -15,15 +15,9 @@ class _PredictorPageState extends State<PredictorPage> {
   final ApiService _apiService = ApiService();
   final _formKey = GlobalKey<FormState>();
 
-  // Model feature input controllers
-  final _clientCountController = TextEditingController();
-  final _cpuUtilizationController = TextEditingController();
-  final _memFreeController = TextEditingController();
-  final _memTotalController = TextEditingController();
-  final _lastModifiedController = TextEditingController();
+  // v3: 只使用推理时可获得的特征
+  final _apNameController = TextEditingController();
   final _hourController = TextEditingController();
-  final _memUsageController = TextEditingController();
-  bool _overloaded = false;
 
   Map<String, dynamic>? _predictionResult;
   bool _isLoading = false;
@@ -39,45 +33,27 @@ class _PredictorPageState extends State<PredictorPage> {
 
   void _autoFillFeatures() {
     final now = DateTime.now();
-    _clientCountController.text = '10';
-    _cpuUtilizationController.text = '50.0';
-    _memFreeController.text = '1000.0';
-    _memTotalController.text = '2000.0';
-    _lastModifiedController.text = '1640995200.0';
+    _apNameController.text = widget.selectedAp!.name;
     _hourController.text = now.hour.toDouble().toStringAsFixed(0);
-    _memUsageController.text = '50.0';
-    _overloaded = false;
   }
 
   Map<String, dynamic> _buildFeatures() {
     final now = DateTime.now();
     final weekday = now.weekday; // 1=Mon, 7=Sun
     return {
-      'client_count': int.parse(_clientCountController.text),
-      'cpu_utilization': double.parse(_cpuUtilizationController.text),
-      'mem_free': double.parse(_memFreeController.text),
-      'mem_total': double.parse(_memTotalController.text),
-      'last_modified': double.parse(_lastModifiedController.text),
+      'ap_name': _apNameController.text.trim(),
       'hour': double.parse(_hourController.text),
-      'mem_usage': double.parse(_memUsageController.text),
-      'overloaded': _overloaded ? 1 : 0,
-      'day_of_week': weekday - 1,  // 0=Mon, 6=Sun
-      'is_weekend': (weekday >= 6) ? 1 : 0,
-      'month': now.month,
-      'day_of_month': now.day,
+      'day_of_week': (weekday - 1).toDouble(), // 0=Mon, 6=Sun
+      'is_weekend': (weekday >= 6) ? 1.0 : 0.0,
+      'month': now.month.toDouble(),
+      'day_of_month': now.day.toDouble(),
     };
   }
 
-
   @override
   void dispose() {
-    _clientCountController.dispose();
-    _cpuUtilizationController.dispose();
-    _memFreeController.dispose();
-    _memTotalController.dispose();
-    _lastModifiedController.dispose();
+    _apNameController.dispose();
     _hourController.dispose();
-    _memUsageController.dispose();
     super.dispose();
   }
 
@@ -152,6 +128,7 @@ class _PredictorPageState extends State<PredictorPage> {
                           style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                         ),
                         const SizedBox(height: 8),
+                        Text('AP: ${widget.selectedAp!.name}'),
                         Text('Building: ${widget.selectedAp!.building}'),
                         Text('Space: ${widget.selectedAp!.espacio ?? 'Unknown'}'),
                         Text('Coordinates: ${widget.selectedAp!.lat.toStringAsFixed(6)}, ${widget.selectedAp!.lng.toStringAsFixed(6)}'),
@@ -194,17 +171,24 @@ class _PredictorPageState extends State<PredictorPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         const Text(
-                          'Auto-filled Features',
+                          'Auto-filled Features (v3)',
                           style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                         ),
                         const SizedBox(height: 8),
-                        _featureRow('Client Count', _clientCountController.text),
-                        _featureRow('CPU Utilization', '${_cpuUtilizationController.text}%'),
-                        _featureRow('Memory Free', _memFreeController.text),
-                        _featureRow('Memory Total', _memTotalController.text),
+                        _featureRow('AP Name', _apNameController.text),
                         _featureRow('Hour', _hourController.text),
-                        _featureRow('Memory Usage', '${_memUsageController.text}%'),
-                        _featureRow('Overloaded', _overloaded ? 'Yes' : 'No'),
+                        const Text(
+                          '  + day_of_week, is_weekend, month, day_of_month (auto)',
+                          style: TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                        const Text(
+                          '  + building, floor, lat, lng (from GeoJSON)',
+                          style: TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
+                        const Text(
+                          '  + predicted_signal_db (from signal model cascade)',
+                          style: TextStyle(fontSize: 11, color: Colors.grey),
+                        ),
                       ],
                     ),
                   ),
@@ -240,110 +224,27 @@ class _PredictorPageState extends State<PredictorPage> {
               if (hasAp || _showManualForm) ...[
                 const SizedBox(height: 16),
                 const Text(
-                  'Enter AP Features for Status Prediction',
+                  'v3 Predictor - 只使用真实可用特征',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '已移除 client_count, cpu_utilization 等虚假默认值',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
                 ),
                 const SizedBox(height: 20),
 
-                // Client count input
+                // AP Name input
                 TextFormField(
-                  controller: _clientCountController,
+                  controller: _apNameController,
                   decoration: const InputDecoration(
-                    labelText: 'Client Count',
-                    hintText: 'Number of connected clients',
+                    labelText: 'AP Name',
+                    hintText: 'e.g. AP-FTI02',
                     border: OutlineInputBorder(),
                   ),
-                  keyboardType: TextInputType.number,
                   validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter client count';
-                    }
-                    if (int.tryParse(value) == null) {
-                      return 'Please enter a valid integer';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // CPU utilization input
-                TextFormField(
-                  controller: _cpuUtilizationController,
-                  decoration: const InputDecoration(
-                    labelText: 'CPU Utilization (%)',
-                    hintText: 'Enter CPU utilization',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter CPU utilization';
-                    }
-                    if (double.tryParse(value) == null) {
-                      return 'Please enter a valid number';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Memory free input
-                TextFormField(
-                  controller: _memFreeController,
-                  decoration: const InputDecoration(
-                    labelText: 'Memory Free',
-                    hintText: 'Enter free memory bytes',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter free memory';
-                    }
-                    if (double.tryParse(value) == null) {
-                      return 'Please enter a valid number';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Memory total input
-                TextFormField(
-                  controller: _memTotalController,
-                  decoration: const InputDecoration(
-                    labelText: 'Memory Total',
-                    hintText: 'Enter total memory bytes',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter total memory';
-                    }
-                    if (double.tryParse(value) == null) {
-                      return 'Please enter a valid number';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 16),
-
-                // Last modified timestamp input
-                TextFormField(
-                  controller: _lastModifiedController,
-                  decoration: const InputDecoration(
-                    labelText: 'Last Modified (Unix)',
-                    hintText: 'Enter unix timestamp',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter last modified timestamp';
-                    }
-                    if (double.tryParse(value) == null) {
-                      return 'Please enter a valid timestamp';
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Please enter AP name';
                     }
                     return null;
                   },
@@ -370,38 +271,20 @@ class _PredictorPageState extends State<PredictorPage> {
                     return null;
                   },
                 ),
-                const SizedBox(height: 16),
-
-                // Memory usage input
-                TextFormField(
-                  controller: _memUsageController,
-                  decoration: const InputDecoration(
-                    labelText: 'Memory Usage (%)',
-                    hintText: 'Enter memory usage percentage',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Please enter memory usage';
-                    }
-                    if (double.tryParse(value) == null) {
-                      return 'Please enter a valid number';
-                    }
-                    return null;
-                  },
+                const SizedBox(height: 8),
+                const Text(
+                  '其他特征 (day_of_week, is_weekend, month, day_of_month) 自动从系统时间获取',
+                  style: TextStyle(fontSize: 11, color: Colors.grey),
                 ),
-                const SizedBox(height: 16),
-
-                // Overloaded switch
-                SwitchListTile(
-                  title: const Text('Overloaded'),
-                  value: _overloaded,
-                  onChanged: (value) {
-                    setState(() {
-                      _overloaded = value;
-                    });
-                  },
+                const SizedBox(height: 8),
+                const Text(
+                  'AP 静态特征 (building, floor, lat, lng) 自动从 GeoJSON 数据库获取',
+                  style: TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '信号强度 (predicted_signal_db) 自动从信号模型级联预测',
+                  style: TextStyle(fontSize: 11, color: Colors.grey),
                 ),
                 const SizedBox(height: 24),
 
@@ -415,7 +298,7 @@ class _PredictorPageState extends State<PredictorPage> {
                     ),
                     child: _isLoading
                         ? const CircularProgressIndicator()
-                        : const Text('Predict AP Status'),
+                        : const Text('Predict AP Status (v3)'),
                   ),
                 ),
               ],
@@ -452,14 +335,42 @@ class _PredictorPageState extends State<PredictorPage> {
                                 'Confidence: ${(_predictionResult!['confidence'] * 100).toStringAsFixed(1)}%',
                               ),
                               const SizedBox(height: 8),
-                              const Text(
-                                'Features Used:',
-                                style: TextStyle(fontWeight: FontWeight.bold),
-                              ),
                               Text(
-                                '${_predictionResult!['features_used']}',
-                                style: const TextStyle(fontSize: 12),
+                                'Model: ${_predictionResult!['model_version'] ?? 'v3'}',
+                                style: const TextStyle(fontSize: 12, color: Colors.grey),
                               ),
+                              const SizedBox(height: 8),
+                              if (_predictionResult!['ap_info'] != null) ...[
+                                const Text(
+                                  'AP Info:',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  '  ${_predictionResult!['ap_info']['name']} - '
+                                  '${_predictionResult!['ap_info']['building']} '
+                                  '(Floor ${_predictionResult!['ap_info']['floor']})',
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ],
+                              const SizedBox(height: 8),
+                              if (_predictionResult!['features_used'] != null) ...[
+                                const Text(
+                                  'Features Used (v3 - 全部真实可用):',
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                                Text(
+                                  '  Time: ${_predictionResult!['features_used']['time']}',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                Text(
+                                  '  AP Static: ${_predictionResult!['features_used']['ap_static']}',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                                Text(
+                                  '  Cascade Signal: ${_predictionResult!['features_used']['cascade']}',
+                                  style: const TextStyle(fontSize: 11),
+                                ),
+                              ],
                             ],
                           ),
                   ),

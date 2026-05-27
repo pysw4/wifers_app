@@ -1,0 +1,41 @@
+{
+  "model_type": "RandomForestClassifier",
+  "feature_names": [
+    "hour",
+    "day_of_week",
+    "is_weekend",
+    "month",
+    "day_of_month",
+    "building_code",
+    "floor",
+    "lat",
+    "lng",
+    "predicted_signal_db"
+  ],
+  "n_train_samples": 2130556,
+  "n_test_samples": 532639,
+  "down_pct": 5.63,
+  "f1_down": 0.9733,
+  "accuracy": 0.9969,
+  "training_date": "2026-05-28 00:39:28",
+  "class_balanced": true,
+  "selection_metric": "f1_down",
+  "version": "v3",
+  "features_removed": [
+    "client_count",
+    "cpu_utilization",
+    "mem_free",
+    "mem_total",
+    "last_modified",
+    "mem_usage",
+    "overloaded"
+  ],
+  "features_added": [
+    "building_code",
+    "floor",
+    "lat",
+    "lng",
+    "predicted_signal_db"
+  ],
+  "description": "\u53ea\u4f7f\u7528\u63a8\u7406\u65f6\u53ef\u83b7\u5f97\u7279\u5f81\u7684\u5206\u7c7b\u5668\uff0c\u79fb\u9664\u865a\u5047\u9ed8\u8ba4\u503c"
+}
