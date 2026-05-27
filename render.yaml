@@ -26,6 +26,7 @@ services:
         - build
 
   # ---- Flutter Web Frontend ----
+  # ---- Flutter Web Frontend (Docker build from main branch) ----
   - type: web
     name: wifers-app-web
     runtime: image
