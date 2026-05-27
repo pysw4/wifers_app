@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
 Pre-compute heatmap data script (supports all 7 days of the week)
-Generates 168 heatmap files (7 days × 24 hours) in one go,
-saves as static JSON files for millisecond API response.
+Generates 7 merged heatmap files (one per day), each containing 18 hourly slots:
+  - Night hours (0-6): only h3 stored as representative (7 hours → 1 slot)
+  - Day hours (7-23): each hour stored individually (17 slots)
+Total: 7 files instead of 168, saving ~75% file count and ~25% data volume.
 
 Usage:
     python precompute_heatmaps.py
 
 Output:
     precomputed/
-        mon/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
-        tue/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
-        wed/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
-        thu/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
-        fri/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
-        sat/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
-        sun/  heatmap_h0.json  ~  heatmap_h23.json   (24 files)
+        mon.json   (merged, 18 hourly slots)
+        tue.json   (merged, 18 hourly slots)
+        ...
+        sun.json   (merged, 18 hourly slots)
 """
+
 
 import json
 import os
@@ -175,9 +175,11 @@ def dbm_to_quality(dbm: float) -> dict:
         return {"quality": "Very Poor", "bars": 1}
 
 # =====================================================================
-# Generate and save merged heatmap data (one file per hour × day)
+# Generate and save merged heatmap data (one merged file per day)
+# Night hours (0-6): only h3 stored as representative
+# Day hours (7-23): each hour stored individually
 # =====================================================================
-print("\n[4] Generating merged heatmap data (AP points + smooth grid)...")
+print("\n[4] Generating merged heatmap data (one file per day, night hours collapsed)...")
 
 # Smooth grid parameters
 north, south, east, west = UAB_bbox
@@ -230,93 +232,113 @@ legend = {
     "Very Poor": {"min_db": -100, "max_db": -80, "color": "darkred", "bars": 1},
 }
 
-for dow_idx, day_name in enumerate(DAY_NAMES):
-    day_dir = OUTPUT_DIR / day_name
-    os.makedirs(day_dir, exist_ok=True)
+# Night hours (0-6): only store h3 as representative
+NIGHT_HOURS = list(range(0, 7))  # 0,1,2,3,4,5,6
+NIGHT_REPRESENTATIVE = 3  # Use h3 as the representative for all night hours
+# Day hours (7-23): store each hour individually
+DAY_HOURS = list(range(7, 24))  # 7,8,...,23
+
+def _build_hourly_data(hour: int, day_name: str, dow_idx: int) -> dict:
+    """Build heatmap data for a single hour."""
+    key = f'{day_name}_h{hour}'
     
-    for hour in all_hours:
-        key = f'{day_name}_h{hour}'
+    # --- AP point data ---
+    heatmap_points = []
+    processed_buildings = set()
+    
+    for ap in ap_points_base:
+        signal_db = ap['signal_by_hour'][key]
+        quality_info = dbm_to_quality(signal_db)
         
-        # --- AP point data ---
-        heatmap_points = []
-        processed_buildings = set()
-        
-        for ap in ap_points_base:
-            signal_db = ap['signal_by_hour'][key]
-            quality_info = dbm_to_quality(signal_db)
+        heatmap_points.append({
+            "lat": ap['lat'],
+            "lng": ap['lng'],
+            "signal_db": round(signal_db, 1),
+            "signal_quality": quality_info["quality"],
+            "bars": quality_info["bars"],
+            "ap_name": ap['ap_name'],
+            "building": ap['building'],
+            "floor": int(ap['floor']),
+        })
+        processed_buildings.add(ap['building'])
+    
+    # --- Smooth grid data ---
+    ap_points_for_idw = []
+    for ap in ap_points_base:
+        ap_points_for_idw.append({
+            'lat': ap['lat'],
+            'lng': ap['lng'],
+            'signal_db': ap['signal_by_hour'][key],
+            'building': ap['building'],
+            'floor': int(ap['floor']),
+        })
+    
+    smooth_points = []
+    for lat in lat_grid:
+        for lng in lng_grid:
+            signal = idw_interpolate(lat, lng, ap_points_for_idw, power=2)
+            if signal is None:
+                continue
             
-            heatmap_points.append({
-                "lat": ap['lat'],
-                "lng": ap['lng'],
-                "signal_db": round(signal_db, 1),
+            quality_info = dbm_to_quality(signal)
+            smooth_points.append({
+                "lat": round(lat, 6),
+                "lng": round(lng, 6),
+                "signal_db": round(signal, 1),
                 "signal_quality": quality_info["quality"],
                 "bars": quality_info["bars"],
-                "ap_name": ap['ap_name'],
-                "building": ap['building'],
-                "floor": int(ap['floor']),
             })
-            processed_buildings.add(ap['building'])
-        
-        # --- Smooth grid data ---
-        ap_points_for_idw = []
-        for ap in ap_points_base:
-            ap_points_for_idw.append({
-                'lat': ap['lat'],
-                'lng': ap['lng'],
-                'signal_db': ap['signal_by_hour'][key],
-                'building': ap['building'],
-                'floor': int(ap['floor']),
-            })
-        
-        smooth_points = []
-        for lat in lat_grid:
-            for lng in lng_grid:
-                signal = idw_interpolate(lat, lng, ap_points_for_idw, power=2)
-                if signal is None:
-                    continue
-                
-                quality_info = dbm_to_quality(signal)
-                smooth_points.append({
-                    "lat": round(lat, 6),
-                    "lng": round(lng, 6),
-                    "signal_db": round(signal, 1),
-                    "signal_quality": quality_info["quality"],
-                    "bars": quality_info["bars"],
-                })
-        
-        # --- Merge output ---
-        result = {
-            "type": "heatmap",
-            "hour": hour,
-            "day_name": day_name,
-            "day_full_name": DAY_FULL_NAMES[dow_idx],
-            "day_of_week": dow_idx,
-            "ap_points": {
-                "total": len(heatmap_points),
-                "buildings_count": len(processed_buildings),
-                "buildings": sorted(list(processed_buildings)),
-                "points": heatmap_points,
+    
+    return {
+        "hour": hour,
+        "ap_points": {
+            "total": len(heatmap_points),
+            "buildings_count": len(processed_buildings),
+            "buildings": sorted(list(processed_buildings)),
+            "points": heatmap_points,
+        },
+        "smooth_grid": {
+            "total": len(smooth_points),
+            "grid_size": {"rows": resolution, "cols": resolution},
+            "bounds": {
+                "north": lat_max,
+                "south": lat_min,
+                "east": lng_max,
+                "west": lng_min,
             },
-            "smooth_grid": {
-                "total": len(smooth_points),
-                "grid_size": {"rows": resolution, "cols": resolution},
-                "bounds": {
-                    "north": lat_max,
-                    "south": lat_min,
-                    "east": lng_max,
-                    "west": lng_min,
-                },
-                "points": smooth_points,
-            },
-            "legend": legend,
-        }
-        
-        output_path = day_dir / f'heatmap_h{hour}.json'
-        with open(output_path, 'w') as f:
-            json.dump(result, f)
-        
-        print(f"  Saved {day_name}/heatmap_h{hour}.json "
-              f"({len(heatmap_points)} AP points + {len(smooth_points)} grid points)")
+            "points": smooth_points,
+        },
+    }
+
+for dow_idx, day_name in enumerate(DAY_NAMES):
+    # Build merged data structure
+    merged = {
+        "type": "heatmap_merged",
+        "day_name": day_name,
+        "day_full_name": DAY_FULL_NAMES[dow_idx],
+        "day_of_week": dow_idx,
+        "legend": legend,
+        "night": {
+            "hours": NIGHT_HOURS,
+            "representative_hour": NIGHT_REPRESENTATIVE,
+            "note": f"Night hours {NIGHT_HOURS[0]}-{NIGHT_HOURS[-1]} use h{NIGHT_REPRESENTATIVE} as representative",
+            "data": _build_hourly_data(NIGHT_REPRESENTATIVE, day_name, dow_idx),
+        },
+        "hours": {},  # {hour_str: hourly_data}
+    }
+    
+    # Day hours: store each individually
+    for hour in DAY_HOURS:
+        merged["hours"][str(hour)] = _build_hourly_data(hour, day_name, dow_idx)
+    
+    # Save merged file
+    output_path = OUTPUT_DIR / f'{day_name}.json'
+    with open(output_path, 'w') as f:
+        json.dump(merged, f)
+    
+    # Count total hourly slots stored
+    day_slots = 1 + len(DAY_HOURS)  # 1 night rep + 17 day hours = 18
+    print(f"  Saved {day_name}.json ({day_slots} hourly slots: night rep h{NIGHT_REPRESENTATIVE} + {len(DAY_HOURS)} day hours)")
 
 # =====================================================================
 # Done
@@ -324,6 +346,8 @@ for dow_idx, day_name in enumerate(DAY_NAMES):
 print("\n" + "=" * 60)
 print("Done! All heatmap data pre-computed.")
 print(f"Output directory: {OUTPUT_DIR}")
-print(f"Total files: {len(all_hours) * len(DAY_NAMES)} "
-      f"({len(DAY_NAMES)} days × {len(all_hours)} hours)")
+total_slots = len(DAY_NAMES) * (1 + len(DAY_HOURS))
+print(f"Total files: {len(DAY_NAMES)} merged files ({total_slots} hourly slots, "
+      f"was {len(all_hours) * len(DAY_NAMES)} files)")
 print("=" * 60)
+
