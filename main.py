@@ -218,6 +218,7 @@ def _dbm_to_quality(dbm: float) -> dict:
 # =====================================================================
 
 class PredictRequest(BaseModel):
+    model_config = {"extra": "ignore"}  # Ignore extra fields from Flutter (client_count, cpu_utilization, etc.)
     building_code: float = Field(default=0, description="Encoded building identifier")
     floor: float = Field(default=0, description="Floor number")
     hour: float = Field(default=12, description="Hour of day (0-23)")
