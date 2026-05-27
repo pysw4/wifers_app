@@ -63,4 +63,4 @@ train_signal_model_v2.py
 # requirements.txt
 # render.yaml
 description.txt
-# geolocation_package/  # 取消注释以排除地理数据包
+# geolocation_package/  # 取消注释以排除地理数据包precomputed/
