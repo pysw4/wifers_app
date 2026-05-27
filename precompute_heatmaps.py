@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """
 Pre-compute heatmap data script (supports all 7 days of the week)
-Generates 7 merged heatmap files (one per day), each containing 18 hourly slots:
-  - Night hours (0-6): only h3 stored as representative (7 hours → 1 slot)
-  - Day hours (7-23): each hour stored individually (17 slots)
-Total: 7 files instead of 168, saving ~75% file count and ~25% data volume.
+Generates individual hourly heatmap files organized by day:
+  precomputed/{day_name}/heatmap_h{hour}.json
+
+Night hours (0-6): only h3 stored as representative (7 hours → 1 file)
+Day hours (7-23): each hour stored as individual file (17 files)
+Total: 7 × (1 + 17) = 126 files, each ~1-2MB
 
 Usage:
     python precompute_heatmaps.py
 
 Output:
     precomputed/
-        mon.json   (merged, 18 hourly slots)
-        tue.json   (merged, 18 hourly slots)
+        mon/heatmap_h{0..23}.json  (h0-h6 all point to h3 data)
+        tue/heatmap_h{0..23}.json
         ...
-        sun.json   (merged, 18 hourly slots)
+        sun/heatmap_h{0..23}.json
 """
 
 
@@ -175,11 +177,11 @@ def dbm_to_quality(dbm: float) -> dict:
         return {"quality": "Very Poor", "bars": 1}
 
 # =====================================================================
-# Generate and save merged heatmap data (one merged file per day)
+# Generate and save individual hourly heatmap files
 # Night hours (0-6): only h3 stored as representative
 # Day hours (7-23): each hour stored individually
 # =====================================================================
-print("\n[4] Generating merged heatmap data (one file per day, night hours collapsed)...")
+print("\n[4] Generating individual hourly heatmap files...")
 
 # Smooth grid parameters
 north, south, east, west = UAB_bbox
@@ -291,6 +293,10 @@ def _build_hourly_data(hour: int, day_name: str, dow_idx: int) -> dict:
     
     return {
         "hour": hour,
+        "day_name": day_name,
+        "day_full_name": DAY_FULL_NAMES[dow_idx],
+        "day_of_week": dow_idx,
+        "legend": legend,
         "ap_points": {
             "total": len(heatmap_points),
             "buildings_count": len(processed_buildings),
@@ -311,34 +317,37 @@ def _build_hourly_data(hour: int, day_name: str, dow_idx: int) -> dict:
     }
 
 for dow_idx, day_name in enumerate(DAY_NAMES):
-    # Build merged data structure
-    merged = {
-        "type": "heatmap_merged",
-        "day_name": day_name,
-        "day_full_name": DAY_FULL_NAMES[dow_idx],
-        "day_of_week": dow_idx,
-        "legend": legend,
-        "night": {
-            "hours": NIGHT_HOURS,
-            "representative_hour": NIGHT_REPRESENTATIVE,
-            "note": f"Night hours {NIGHT_HOURS[0]}-{NIGHT_HOURS[-1]} use h{NIGHT_REPRESENTATIVE} as representative",
-            "data": _build_hourly_data(NIGHT_REPRESENTATIVE, day_name, dow_idx),
-        },
-        "hours": {},  # {hour_str: hourly_data}
-    }
+    # Create day directory
+    day_dir = OUTPUT_DIR / day_name
+    day_dir.mkdir(parents=True, exist_ok=True)
     
-    # Day hours: store each individually
+    # Night representative: save h3 data, then symlink/copy for h0-h6
+    night_data = _build_hourly_data(NIGHT_REPRESENTATIVE, day_name, dow_idx)
+    night_filepath = day_dir / f'heatmap_h{NIGHT_REPRESENTATIVE}.json'
+    with open(night_filepath, 'w') as f:
+        json.dump(night_data, f)
+    
+    # For night hours 0-6 (except h3 itself), copy the same data
+    for h in NIGHT_HOURS:
+        if h == NIGHT_REPRESENTATIVE:
+            continue
+        hour_filepath = day_dir / f'heatmap_h{h}.json'
+        # Write a copy (symlinks don't work well with git)
+        data_copy = dict(night_data)
+        data_copy["hour"] = h
+        data_copy["is_night_representative"] = True
+        data_copy["representative_hour"] = NIGHT_REPRESENTATIVE
+        with open(hour_filepath, 'w') as f:
+            json.dump(data_copy, f)
+    
+    # Day hours: save each individually
     for hour in DAY_HOURS:
-        merged["hours"][str(hour)] = _build_hourly_data(hour, day_name, dow_idx)
+        hour_data = _build_hourly_data(hour, day_name, dow_idx)
+        hour_filepath = day_dir / f'heatmap_h{hour}.json'
+        with open(hour_filepath, 'w') as f:
+            json.dump(hour_data, f)
     
-    # Save merged file
-    output_path = OUTPUT_DIR / f'{day_name}.json'
-    with open(output_path, 'w') as f:
-        json.dump(merged, f)
-    
-    # Count total hourly slots stored
-    day_slots = 1 + len(DAY_HOURS)  # 1 night rep + 17 day hours = 18
-    print(f"  Saved {day_name}.json ({day_slots} hourly slots: night rep h{NIGHT_REPRESENTATIVE} + {len(DAY_HOURS)} day hours)")
+    print(f"  Saved {day_name}/ (24 files: night rep h{NIGHT_REPRESENTATIVE} + {len(DAY_HOURS)} day hours)")
 
 # =====================================================================
 # Done
@@ -346,8 +355,6 @@ for dow_idx, day_name in enumerate(DAY_NAMES):
 print("\n" + "=" * 60)
 print("Done! All heatmap data pre-computed.")
 print(f"Output directory: {OUTPUT_DIR}")
-total_slots = len(DAY_NAMES) * (1 + len(DAY_HOURS))
-print(f"Total files: {len(DAY_NAMES)} merged files ({total_slots} hourly slots, "
-      f"was {len(all_hours) * len(DAY_NAMES)} files)")
+total_files = len(DAY_NAMES) * len(all_hours)
+print(f"Total files: {total_files} (7 days × 24 hours, night hours share h3 data)")
 print("=" * 60)
-
