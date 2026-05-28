@@ -24,9 +24,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 import joblib
+from foto2ap_service import recognize_ap
 import pandas as pd
 import uvicorn
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -545,6 +546,51 @@ async def get_advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: 
         if dist_to_start <= acceptable_range or dist_to_dest <= acceptable_range:
             path_aps.append({"lat": ap["lat"], "lng": ap["lng"], "building": ap["building"], "floor": int(ap["floor"]), "ap_name": ap["name"], "distance_to_start": round(dist_to_start, 1), "distance_to_dest": round(dist_to_dest, 1)})
     return {"path": [{"lat": round(lat, 6), "lng": round(lng, 6)}] + [{"lat": round(ap["lat"], 6), "lng": round(ap["lng"], 6)} for ap in path_aps] + [{"lat": round(dest_lat, 6), "lng": round(dest_lng, 6)}], "waypoints": path_aps, "total_waypoints": len(path_aps)}
+
+
+@app.post("/foto2ap/recognize")
+async def foto2ap_recognize(file: UploadFile = File(...)):
+    """
+    Upload a photo of an AP access point and recognise its name + location.
+
+    Uses PaddleOCR to extract text from the image, parses the AP code,
+    and looks up its coordinates in the GeoJSON database.
+
+    Returns:
+        {
+            "success": true,
+            "ap_name": "AP-ETSE58",
+            "lat": 41.5004,
+            "lng": 2.1129,
+            "building": "ETSE",
+            "floor": 0,
+            "espacio": "..."
+        }
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="File must be an image")
+
+    try:
+        image_bytes = await file.read()
+        if len(image_bytes) == 0:
+            raise HTTPException(status_code=400, detail="Empty file")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Failed to read uploaded file")
+
+    try:
+        result = recognize_ap(image_bytes)
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"OCR recognition failed: {str(e)}")
+
+    if result is None:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "message": "No AP could be recognised in the image. Try a clearer photo of the AP label."}
+        )
+
+    return {"success": True, **result}
 
 
 @app.get("/cache/status")

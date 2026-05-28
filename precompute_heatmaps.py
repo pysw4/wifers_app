@@ -203,7 +203,7 @@ lat_max = north - margin_lat
 lng_min = west + margin_lng
 lng_max = east - margin_lng
 
-resolution = 30
+resolution = 100
 lat_grid = [lat_min + (lat_max - lat_min) * i / (resolution - 1) for i in range(resolution)]
 lng_grid = [lng_min + (lng_max - lng_min) * i / (resolution - 1) for i in range(resolution)]
 

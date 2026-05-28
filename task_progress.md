@@ -1,18 +1,18 @@
-# Task Progress
+# Foto2AP 功能实现 - 完成
 
-- [x] 分析 map_page 和 recommend_page 代码结构
-- [x] 从 map_page.dart 中移除 recommend 模式相关代码
-- [x] 清理 map_page.dart 中不再需要的 import
-- [x] 验证代码编译无误
-- [x] 在 ApDataService 中添加区域(zone)分组数据和方法
-- [x] 在 recommend_page 中添加区域选择器
-- [x] 区域选择联动建筑筛选
-- [x] 验证代码编译无误
-- [x] 重写 recommend_page：嵌入迷你地图替代 Zone dropdown
-- [x] 迷你地图支持点击设定中心点 + 半径滑块
-- [x] 使用地图选择的位置替代设备当前位置请求推荐
-- [x] 移除 ApDataService 中不再需要的 Zone 相关代码
-- [x] 验证代码编译无误
-- [x] 推送代码
-- [x] 修复热力图静态文件加载 No host specified 错误
-- [ ] 热力图重映射：无 AP 覆盖区域显示无色，信号差区域显示红色
+## 新增文件
+- **`foto2ap_service.py`** — Python 后端 OCR 服务（从 notebook 提取的 AP 识别逻辑）
+- **`lib/services/foto2ap_service.dart`** — Flutter 端 API 封装
+
+## 修改文件
+- **`main.py`** — 添加 `POST /foto2ap/recognize` 端点
+- **`lib/pages/map_page.dart`** — 添加 Foto2AP 模式（相机 FAB、标记、信息卡片）
+- **`pubspec.yaml`** — 添加 `image_picker` 依赖
+- **`requirements.txt`** — 添加 `rapidfuzz` 依赖
+
+## 功能流程
+1. 点击 📷 相机 FAB → 选择拍照/相册
+2. 图片上传后端 → PaddleOCR 识别文本 → 解析 AP 代码 → GeoJSON 查坐标
+3. 成功：清除 heatmap → 显示紫色大标记 + 底部信息卡片（AP名、建筑、楼层）
+4. 失败：显示错误提示
+5. 点击关闭按钮 → 恢复 heatmap 模式

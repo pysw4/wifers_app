@@ -53,9 +53,12 @@ class RecommendPageState extends State<RecommendPage> {
   List<RecommendedAp> _results = [];
   List<String> _buildings = [];
 
+  // Selection mode: 'map' or 'building'
+  String _selectionMode = 'map';
+
   // Map-based search area
   LatLng _searchCenter = const LatLng(41.503, 2.105); // UAB campus center default
-  double _searchRadiusMeters = 300;
+  double _searchRadiusMeters = 100;
 
   static const _modes = {
     'distance': _ModeDisplay('Distance Priority', Icons.near_me, Colors.green),
@@ -80,11 +83,13 @@ class RecommendPageState extends State<RecommendPage> {
       _preferStable = s['preferStableAps'] ?? true;
       _mode = s['recommendMode'] as String? ?? 'balanced';
       _building = s['selectedBuilding'] as String? ?? '';
+      _selectionMode = s['recommendSelectionMode'] as String? ?? 'map';
     });
   }
 
   Future<void> _saveMode(String m) async { final s = await StorageService.loadSettings(); s['recommendMode'] = m; await StorageService.saveSettings(s); }
   Future<void> _saveBuilding(String b) async { final s = await StorageService.loadSettings(); s['selectedBuilding'] = b; await StorageService.saveSettings(s); }
+  Future<void> _saveSelectionMode(String m) async { final s = await StorageService.loadSettings(); s['recommendSelectionMode'] = m; await StorageService.saveSettings(s); }
 
   Future<void> _initSearchCenter() async {
     try {
@@ -183,13 +188,49 @@ class RecommendPageState extends State<RecommendPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('AP Recommendation'), backgroundColor: Theme.of(context).colorScheme.inversePrimary),
+      appBar: AppBar(
+        title: const Text('AP Recommendation'),
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Mode selector
+            // Selection mode toggle: Map or Building
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<String>(
+                segments: const [
+                  ButtonSegment(
+                    value: 'map',
+                    label: Text('On Map', style: TextStyle(fontSize: 11)),
+                    icon: Icon(Icons.map, size: 16),
+                  ),
+                  ButtonSegment(
+                    value: 'building',
+                    label: Text('By Building', style: TextStyle(fontSize: 11)),
+                    icon: Icon(Icons.business, size: 16),
+                  ),
+                ],
+                selected: {_selectionMode},
+                onSelectionChanged: (s) {
+                  setState(() {
+                    _selectionMode = s.first;
+                    // When switching to building mode, default to all buildings
+                    if (s.first == 'building') {
+                      _building = '';
+                      _saveBuilding('');
+                    }
+                  });
+                  _saveSelectionMode(s.first);
+                },
+                showSelectedIcon: false,
+                style: ButtonStyle(visualDensity: VisualDensity.compact, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Recommendation mode selector
             SizedBox(
               width: double.infinity,
               child: SegmentedButton<String>(
@@ -205,135 +246,150 @@ class RecommendPageState extends State<RecommendPage> {
               ),
             ),
             const SizedBox(height: 8),
-            // Mini map for area selection
-            Card(
-              margin: EdgeInsets.zero,
-              clipBehavior: Clip.antiAlias,
-              child: SizedBox(
-                height: 250,
-                child: Stack(
-                  children: [
-                    FlutterMap(
-                      mapController: _mapController,
-                      options: MapOptions(
-                        initialCenter: _searchCenter,
-                        initialZoom: 15.5,
-                        minZoom: 14.5,
-                        maxZoom: 18.0,
-                        cameraConstraint: CameraConstraint.contain(bounds: _campusBounds),
-                        onTap: (tapPos, latlng) {
-                          setState(() => _searchCenter = latlng);
-                        },
-                      ),
-                      children: [
-                        TileLayer(
-                          urlTemplate: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
-                          userAgentPackageName: 'com.uab.wifers',
+            // Conditional UI: Map selection or Building selection
+            if (_selectionMode == 'map') ...[
+              // Mini map for area selection
+              Card(
+                margin: EdgeInsets.zero,
+                clipBehavior: Clip.antiAlias,
+                child: SizedBox(
+                  height: 250,
+                  child: Stack(
+                    children: [
+                      FlutterMap(
+                        mapController: _mapController,
+                        options: MapOptions(
+                          initialCenter: _searchCenter,
+                          initialZoom: 15.5,
+                          minZoom: 14.5,
+                          maxZoom: 18.0,
+                          cameraConstraint: CameraConstraint.contain(bounds: _campusBounds),
+                          onTap: (tapPos, latlng) {
+                            setState(() => _searchCenter = latlng);
+                          },
                         ),
-                        // Search radius circle
-                        CircleLayer(
-                          circles: [
-                            CircleMarker(
-                              point: _searchCenter,
-                              radius: _searchRadiusMeters,
-                              color: Colors.blue.withValues(alpha: 0.12),
-                              borderColor: Colors.blue.withValues(alpha: 0.4),
-                              borderStrokeWidth: 2,
-                            ),
-                          ],
-                        ),
-                        // Center pin marker
-                        MarkerLayer(
-                          markers: [
-                            Marker(
-                              point: _searchCenter,
-                              width: 40,
-                              height: 40,
-                              child: const Icon(Icons.location_on, color: Colors.blue, size: 36),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                    // Top-left info overlay
-                    Positioned(
-                      top: 8,
-                      left: 8,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.85),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          'Tap map to set center',
-                          style: TextStyle(fontSize: 11, color: Colors.grey[700]),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            // Radius slider
-            Row(children: [
-              const Icon(Icons.radio_button_unchecked, size: 16, color: Colors.blue),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Slider(
-                  value: _searchRadiusMeters,
-                  min: 50,
-                  max: 1000,
-                  divisions: 19,
-                  label: '${_searchRadiusMeters.toInt()} m',
-                  onChanged: (v) => setState(() => _searchRadiusMeters = v),
-                ),
-              ),
-              SizedBox(
-                width: 60,
-                child: Text('${_searchRadiusMeters.toInt()} m', style: const TextStyle(fontSize: 13)),
-              ),
-            ]),
-            // Center coordinates display
-            Padding(
-              padding: const EdgeInsets.only(left: 24, bottom: 4),
-              child: Text(
-                'Center: ${_searchCenter.latitude.toStringAsFixed(5)}, ${_searchCenter.longitude.toStringAsFixed(5)}',
-                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-              ),
-            ),
-            const SizedBox(height: 4),
-            // Building selector
-            Card(
-              margin: EdgeInsets.zero,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                child: Row(children: [
-                  Icon(Icons.business, size: 18, color: Colors.grey[600]),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: _buildings.contains(_building) ? _building : '',
-                        isExpanded: true,
-                        hint: const Text('Building (optional)', style: TextStyle(fontSize: 14)),
-                        items: [
-                          const DropdownMenuItem(value: '', child: Text('Building (optional)', style: TextStyle(fontSize: 14))),
-                          ..._buildings.map((b) => DropdownMenuItem(value: b, child: Text(b, style: const TextStyle(fontSize: 14)))),
+                        children: [
+                          TileLayer(
+                            urlTemplate: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+                            userAgentPackageName: 'com.uab.wifers',
+                          ),
+                          // Search radius circle
+                          CircleLayer(
+                            circles: [
+                              CircleMarker(
+                                point: _searchCenter,
+                                radius: _searchRadiusMeters,
+                                useRadiusInMeter: true,
+                                color: Colors.blue.withValues(alpha: 0.12),
+                                borderColor: Colors.blue.withValues(alpha: 0.4),
+                                borderStrokeWidth: 2,
+                              ),
+                            ],
+                          ),
+                          // Center pin marker
+                          MarkerLayer(
+                            markers: [
+                              Marker(
+                                point: _searchCenter,
+                                width: 40,
+                                height: 40,
+                                child: const Icon(Icons.location_on, color: Colors.blue, size: 36),
+                              ),
+                            ],
+                          ),
                         ],
-                        onChanged: (v) { if (v != null) { setState(() => _building = v); _saveBuilding(v); } },
+                      ),
+                      // Top-left info overlay
+                      Positioned(
+                        top: 8,
+                        left: 8,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.85),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'Tap map to set center',
+                            style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Radius slider
+              Row(children: [
+                const Icon(Icons.radio_button_unchecked, size: 16, color: Colors.blue),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Slider(
+                    value: _searchRadiusMeters,
+                    min: 20,
+                    max: 300,
+                    divisions: 28,
+                    label: '${_searchRadiusMeters.toInt()} m',
+                    onChanged: (v) => setState(() => _searchRadiusMeters = v),
+                  ),
+                ),
+                SizedBox(
+                  width: 60,
+                  child: Text('${_searchRadiusMeters.toInt()} m', style: const TextStyle(fontSize: 13)),
+                ),
+              ]),
+              // Center coordinates display
+              Padding(
+                padding: const EdgeInsets.only(left: 24, bottom: 4),
+                child: Text(
+                  'Center: ${_searchCenter.latitude.toStringAsFixed(5)}, ${_searchCenter.longitude.toStringAsFixed(5)}',
+                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                ),
+              ),
+            ] else ...[
+              // Building selector
+              Card(
+                margin: EdgeInsets.zero,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: Row(children: [
+                    Icon(Icons.business, size: 18, color: Colors.grey[600]),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: _buildings.contains(_building) ? _building : '',
+                          isExpanded: true,
+                          hint: const Text('Select a building', style: TextStyle(fontSize: 14)),
+                          items: [
+                            const DropdownMenuItem(value: '', child: Text('Select a building', style: TextStyle(fontSize: 14))),
+                            ..._buildings.map((b) => DropdownMenuItem(value: b, child: Text(b, style: const TextStyle(fontSize: 14)))),
+                          ],
+                          onChanged: (v) { if (v != null) { setState(() => _building = v); _saveBuilding(v); } },
+                        ),
                       ),
                     ),
-                  ),
-                  if (_building.isNotEmpty)
-                    GestureDetector(
-                      onTap: () { setState(() => _building = ''); _saveBuilding(''); },
-                      child: Icon(Icons.close, size: 16, color: Colors.grey[400]),
-                    ),
-                ]),
+                    if (_building.isNotEmpty)
+                      GestureDetector(
+                        onTap: () { setState(() => _building = ''); _saveBuilding(''); },
+                        child: Icon(Icons.close, size: 16, color: Colors.grey[400]),
+                      ),
+                  ]),
+                ),
               ),
-            ),
+              const SizedBox(height: 8),
+              // Show selected building info
+              if (_building.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: Row(children: [
+                    Icon(Icons.check_circle, size: 16, color: Colors.green[600]),
+                    const SizedBox(width: 6),
+                    Text('Building: $_building', style: TextStyle(fontSize: 13, color: Colors.green[700], fontWeight: FontWeight.w500)),
+                  ]),
+                ),
+            ],
             const SizedBox(height: 8),
             // Status text
             Text(_status, style: const TextStyle(fontSize: 14, color: Colors.black54)),

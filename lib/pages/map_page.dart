@@ -11,9 +11,11 @@ import 'package:wifers_app/services/heatmap_asset_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
 import 'package:wifers_app/services/cache_service.dart';
+import 'package:wifers_app/services/foto2ap_service.dart';
 import 'package:wifers_app/models/ap_info.dart';
 import 'package:wifers_app/pages/route_page.dart';
 import 'package:wifers_app/pages/ap_trend_dialog.dart';
+import 'package:image_picker/image_picker.dart';
 
 class MapPage extends StatefulWidget {
   const MapPage({super.key});
@@ -51,11 +53,11 @@ class _MapPageState extends State<MapPage> {
   bool _isLoadingHeatmap = false;
   int _selectedHour = DateTime.now().hour;
 
-  // Day of week selection: 0=Mon, 6=Sun
+  // Day of week — always use current day
   static const List<String> _dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   static const List<String> _dayApiNames = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-  int _selectedDay = DateTime.now().weekday - 1; // DateTime.monday=1 -> our index 0
-  String get _selectedDayApiName => _dayApiNames[_selectedDay];
+  int get _currentDayIndex => DateTime.now().weekday - 1; // DateTime.monday=1 -> our index 0
+  String get _currentDayApiName => _dayApiNames[_currentDayIndex];
   final Map<String, Color> _signalColors = {
     'Excellent': const Color(0xFF00E676), // Bright Green (strongest signal)
     'Good': const Color(0xFF76FF03), // Light Green
@@ -70,6 +72,172 @@ class _MapPageState extends State<MapPage> {
 
   // Smooth heatmap state (grid mode) - loaded together with AP heatmap data
   List<Map<String, dynamic>> _smoothHeatmapPoints = [];
+
+  // -----------------------------------------------------------------------
+  // Foto2AP state
+  // -----------------------------------------------------------------------
+  bool _isFoto2ApMode = false;
+  bool _isFoto2ApLoading = false;
+  Foto2ApResult? _foto2ApResult;
+
+  /// Pick an image from gallery or camera and recognise the AP.
+  Future<void> _startFoto2Ap(ImageSource source) async {
+    final picker = ImagePicker();
+    final XFile? image = await picker.pickImage(
+      source: source,
+      maxWidth: 1920,
+      maxHeight: 1920,
+      imageQuality: 85,
+    );
+    if (image == null) return;
+
+    setState(() {
+      _isFoto2ApLoading = true;
+      _isFoto2ApMode = true;
+      // Clear heatmap so we only show the recognised AP marker
+      _heatmapCache = {};
+      _smoothHeatmapPoints = [];
+    });
+
+    try {
+      final result = await Foto2ApService.recognizeAp(image.path);
+      setState(() {
+        _foto2ApResult = result;
+        _isFoto2ApLoading = false;
+      });
+
+      if (result.success && result.lat != null && result.lng != null) {
+        // Fly to the recognised AP location
+        _mapController.move(LatLng(result.lat!, result.lng!), 18.0);
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(result.errorMessage ?? 'No AP recognised'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+    } catch (e) {
+      setState(() {
+        _isFoto2ApLoading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Foto2AP error: $e')),
+        );
+      }
+    }
+  }
+
+  /// Show a bottom sheet to choose camera or gallery.
+  Future<void> _showFoto2ApSourcePicker() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Recognise AP from Photo',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                leading: const Icon(Icons.camera_alt, color: Colors.blue),
+                title: const Text('Take a Photo'),
+                subtitle: const Text('Use camera to capture AP label'),
+                onTap: () => Navigator.pop(context, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library, color: Colors.green),
+                title: const Text('Choose from Gallery'),
+                subtitle: const Text('Select an existing photo'),
+                onTap: () => Navigator.pop(context, ImageSource.gallery),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (source != null) {
+      _startFoto2Ap(source);
+    }
+  }
+
+  /// Clear Foto2AP mode and restore heatmap.
+  void _clearFoto2Ap() {
+    setState(() {
+      _isFoto2ApMode = false;
+      _foto2ApResult = null;
+    });
+    _loadHeatmap();
+  }
+
+  /// Build the Foto2AP result marker (large, prominent).
+  List<Marker> get _foto2ApMarkers {
+    if (!_isFoto2ApMode || _foto2ApResult == null || !_foto2ApResult!.success) {
+      return [];
+    }
+    final r = _foto2ApResult!;
+    if (r.lat == null || r.lng == null) return [];
+
+    return [
+      Marker(
+        point: LatLng(r.lat!, r.lng!),
+        width: 80,
+        height: 80,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Pulsing AP marker
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: const Color(0xFF7C4DFF).withValues(alpha: 0.9),
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white,
+                  width: 3,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: const Color(0xFF7C4DFF).withValues(alpha: 0.6),
+                    blurRadius: 16,
+                    spreadRadius: 4,
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.wifi_find,
+                color: Colors.white,
+                size: 26,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                r.apName ?? 'AP',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    ];
+  }
 
   Future<void> _loadAps() async {
     try {
@@ -89,11 +257,11 @@ class _MapPageState extends State<MapPage> {
     final zoom = _currentZoom;
 
     if (isHeatmap) {
-      if (zoom >= 18) return 36;
-      if (zoom >= 16) return 28;
-      if (zoom >= 14) return 20;
-      if (zoom >= 12) return 14;
-      return 10; // zoom < 12，即使热力图也变小
+      if (zoom >= 18) return 24;
+      if (zoom >= 16) return 18;
+      if (zoom >= 14) return 14;
+      if (zoom >= 12) return 10;
+      return 8; // zoom < 12，即使热力图也变小
     }
     // 普通模式
     if (zoom >= 18) return 14;
@@ -107,11 +275,11 @@ class _MapPageState extends State<MapPage> {
   double _getHeatmapTextSize() {
     final zoom = _currentZoom;
 
-    if (zoom >= 18) return 11;
-    if (zoom >= 16) return 8;
-    if (zoom >= 14) return 7;
-    if (zoom >= 12) return 6;
-    return 5;
+    if (zoom >= 18) return 9;
+    if (zoom >= 16) return 7;
+    if (zoom >= 14) return 6;
+    if (zoom >= 12) return 5;
+    return 4;
   }
 
   /// 热力图模式下是否显示 AP 标记（缩放太小时只显示热力图网格不显示点）
@@ -301,7 +469,8 @@ class _MapPageState extends State<MapPage> {
 
     try {
       // Build cache key (include day for 7-day support)
-      final cacheKey = 'heatmap_${_selectedDayApiName}_$_selectedHour';
+      // v2: resolution 100 (100x100 grid)
+      final cacheKey = 'heatmap_v2_${_currentDayApiName}_$_selectedHour';
       const heatmapTtl = Duration(minutes: 30);
 
       // Try cache first
@@ -316,7 +485,7 @@ class _MapPageState extends State<MapPage> {
       try {
         final staticData = await HeatmapAssetService.loadHeatmap(
           hour: _selectedHour,
-          day: _selectedDayApiName,
+          day: _currentDayApiName,
         );
         await CacheService.set(cacheKey, staticData);
         _processHeatmapData(staticData);
@@ -329,7 +498,7 @@ class _MapPageState extends State<MapPage> {
       // Fallback: load from API
       final data = await _apiService.getSignalHeatmap(
         hour: _selectedHour,
-        day: _selectedDayApiName,
+        day: _currentDayApiName,
       );
 
       // Save to cache
@@ -801,9 +970,9 @@ class _MapPageState extends State<MapPage> {
 
   /// Map a signal_db value to a color using the actual data range.
   /// The precomputed heatmap data has signal_db in roughly [-71, -57] dBm.
-  /// - -71 dBm (worst in data) → red
-  /// - -64 dBm (median) → yellow
-  /// - -57 dBm (best in data) → green
+  /// - -71 dBm (worst in data) → deep red
+  /// - -64 dBm (median) → orange
+  /// - -57 dBm (best in data) → vibrant green
   static Color _signalDbToColor(double signalDb) {
     // Use the actual observed range from the precomputed data
     const double minDb = -71.0;
@@ -811,21 +980,38 @@ class _MapPageState extends State<MapPage> {
     final clamped = signalDb.clamp(minDb, maxDb);
     // Normalize: -71 → 0.0 (worst/red), -57 → 1.0 (best/green)
     final t = (clamped - minDb) / (maxDb - minDb);
-    // Interpolate: red (0.0) → yellow (0.5) → green (1.0)
-    if (t < 0.5) {
-      // Red → Yellow
-      final u = t / 0.5; // 0.0 → 1.0
+    // Use 4-stop gradient for more visual distinction:
+    // Deep Red → Red → Orange → Yellow → Vibrant Green
+    if (t < 0.25) {
+      // Deep Red → Red
+      final u = t / 0.25;
+      return Color.lerp(
+        const Color(0xFFB71C1C), // Deep Red
+        const Color(0xFFD50000), // Red
+        u,
+      )!;
+    } else if (t < 0.50) {
+      // Red → Orange
+      final u = (t - 0.25) / 0.25;
       return Color.lerp(
         const Color(0xFFD50000), // Red
+        const Color(0xFFFF6D00), // Orange
+        u,
+      )!;
+    } else if (t < 0.75) {
+      // Orange → Yellow
+      final u = (t - 0.50) / 0.25;
+      return Color.lerp(
+        const Color(0xFFFF6D00), // Orange
         const Color(0xFFFFEA00), // Yellow
         u,
       )!;
     } else {
-      // Yellow → Green
-      final u = (t - 0.5) / 0.5; // 0.0 → 1.0
+      // Yellow → Vibrant Green
+      final u = (t - 0.75) / 0.25;
       return Color.lerp(
         const Color(0xFFFFEA00), // Yellow
-        const Color(0xFF00E676), // Green
+        const Color(0xFF00E676), // Vibrant Green
         u,
       )!;
     }
@@ -891,62 +1077,11 @@ class _MapPageState extends State<MapPage> {
           LatLng(lat + halfLat, lng + halfLng),
           LatLng(lat + halfLat, lng - halfLng),
         ],
-        color: color.withValues(alpha: 0.45),
-        borderColor: color.withValues(alpha: 0.15),
+        color: color.withValues(alpha: 0.15),
+        borderColor: color.withValues(alpha: 0.04),
         borderStrokeWidth: 0.5,
       );
     }).toList();
-  }
-
-  Widget _buildDaySelector() {
-    return Positioned(
-      bottom: 80,
-      left: 10,
-      right: 10,
-      child: Center(
-        child: Card(
-          elevation: 4,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: List.generate(7, (index) {
-                final isSelected = index == _selectedDay;
-                return Padding(
-                  padding: const EdgeInsets.all(2),
-                  child: GestureDetector(
-                    onTap: () {
-                      if (index != _selectedDay) {
-                        setState(() {
-                          _selectedDay = index;
-                        });
-                        _loadHeatmap();
-                      }
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: isSelected ? Colors.blue : Colors.transparent,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Text(
-                        _dayNames[index],
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                          color: isSelected ? Colors.white : Colors.black87,
-                        ),
-                      ),
-                    ),
-                  ),
-                );
-              }),
-            ),
-          ),
-        ),
-      ),
-    );
   }
 
   Widget _buildHeatmapLegend() {
@@ -968,7 +1103,7 @@ class _MapPageState extends State<MapPage> {
                   style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                 ),
                 Text(
-                  '${_dayNames[_selectedDay]} $_selectedHour:00',
+                  '${_dayNames[_currentDayIndex]} $_selectedHour:00',
                   style: const TextStyle(fontSize: 11, color: Colors.grey),
                 ),
                 const Divider(height: 8),
@@ -1009,6 +1144,207 @@ class _MapPageState extends State<MapPage> {
     return const SizedBox.shrink();
   }
 
+  /// Build the Foto2AP result info card (shown at bottom when in Foto2AP mode).
+  Widget _buildFoto2ApInfoCard() {
+    if (!_isFoto2ApMode || _foto2ApResult == null) return const SizedBox.shrink();
+
+    final r = _foto2ApResult!;
+
+    if (_isFoto2ApLoading) {
+      return Positioned(
+        bottom: 20,
+        left: 20,
+        right: 20,
+        child: Card(
+          elevation: 6,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Recognising AP from photo...',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (!r.success) {
+      return Positioned(
+        bottom: 20,
+        left: 20,
+        right: 20,
+        child: Card(
+          elevation: 6,
+          color: Colors.orange.shade50,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                const Icon(Icons.error_outline, color: Colors.orange),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    r.errorMessage ?? 'Could not recognise AP',
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _clearFoto2Ap,
+                  child: const Text('Dismiss'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Success card
+    return Positioned(
+      bottom: 20,
+      left: 20,
+      right: 20,
+      child: Card(
+        elevation: 8,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: const Color(0xFF7C4DFF).withValues(alpha: 0.3),
+            width: 1.5,
+          ),
+        ),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: LinearGradient(
+              colors: [
+                const Color(0xFF7C4DFF).withValues(alpha: 0.05),
+                Colors.white,
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF7C4DFF).withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.wifi_find,
+                      color: Color(0xFF7C4DFF),
+                      size: 24,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          r.apName ?? 'Unknown AP',
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        Text(
+                          r.building ?? 'Unknown building',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // Close button
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: _clearFoto2Ap,
+                    tooltip: 'Clear & restore heatmap',
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // Details row
+              Row(
+                children: [
+                  _buildInfoChip(Icons.location_on, 'Floor ${r.floor ?? '?'}'),
+                  const SizedBox(width: 8),
+                  if (r.espacio != null && r.espacio!.isNotEmpty)
+                    _buildInfoChip(Icons.room, r.espacio!),
+                  const Spacer(),
+                  // Navigate button
+                  TextButton.icon(
+                    onPressed: () {
+                      // Find the APInfo for this AP and navigate
+                      final apInfo = _aps.where((a) =>
+                        a.name?.toUpperCase() == r.apName?.toUpperCase()
+                      ).firstOrNull;
+                      if (apInfo != null) {
+                        _showAPOptions(apInfo);
+                      }
+                    },
+                    icon: const Icon(Icons.directions, size: 18),
+                    label: const Text('Navigate'),
+                    style: TextButton.styleFrom(
+                      foregroundColor: const Color(0xFF7C4DFF),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoChip(IconData icon, String label) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Colors.grey[600]),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final displayCenter = _currentLocation ?? _center;
@@ -1041,34 +1377,75 @@ class _MapPageState extends State<MapPage> {
                 userAgentPackageName: 'com.uab.wifers',
               ),
               // Smooth heatmap grid overlay (rendered below markers)
-              PolygonLayer(
-                polygons: _smoothHeatmapPolygons,
-              ),
+              // Hidden in Foto2AP mode
+              if (!_isFoto2ApMode)
+                PolygonLayer(
+                  polygons: _smoothHeatmapPolygons,
+                ),
               MarkerLayer(
-                markers: _markers,
+                markers: [
+                  // Normal heatmap/AP markers (hidden in Foto2AP mode)
+                  if (!_isFoto2ApMode) ..._markers,
+                  // Foto2AP result marker
+                  ..._foto2ApMarkers,
+                ],
               ),
             ],
           ),
-          // Heatmap legend overlay
-          _buildHeatmapLegend(),
-          // Day of week selector
-          _buildDaySelector(),
+          // Heatmap legend overlay (hidden in Foto2AP mode)
+          if (!_isFoto2ApMode) _buildHeatmapLegend(),
+          // Foto2AP info card
+          _buildFoto2ApInfoCard(),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        heroTag: 'time',
-        mini: true,
-        onPressed: _showHourPicker,
-        child: _isLoadingHeatmap
-            ? const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : Text(
-                '${_selectedHour}h',
-                style: const TextStyle(fontSize: 12),
-              ),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          // Time picker FAB (hidden in Foto2AP mode)
+          if (!_isFoto2ApMode)
+            FloatingActionButton(
+              heroTag: 'time',
+              mini: true,
+              onPressed: _showHourPicker,
+              child: _isLoadingHeatmap
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Text(
+                      '${_selectedHour}h',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+            ),
+          if (!_isFoto2ApMode) const SizedBox(height: 12),
+          // Camera FAB
+          FloatingActionButton(
+            heroTag: 'camera',
+            mini: true,
+            backgroundColor: _isFoto2ApMode
+                ? const Color(0xFF7C4DFF)
+                : Colors.blue,
+            onPressed: _isFoto2ApLoading
+                ? null
+                : _showFoto2ApSourcePicker,
+            child: _isFoto2ApLoading
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(
+                    Icons.camera_alt,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+          ),
+        ],
       ),
     );
   }
