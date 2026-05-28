@@ -784,7 +784,7 @@ class _MapPageState extends State<MapPage> {
 
   /// Maximum distance (in meters) from the nearest AP for a grid point
   /// to be considered "covered". Points farther than this are hidden.
-  static const double _apCoverageRadiusM = 60.0;
+  static const double _apCoverageRadiusM = 30.0;
 
   /// Haversine distance in meters between two lat/lng points.
   static double _haversineM(double lat1, double lng1, double lat2, double lng2) {
