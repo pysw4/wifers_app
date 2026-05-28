@@ -52,7 +52,7 @@ class RecommendPageState extends State<RecommendPage> {
   List<RecommendedAp> _results = [];
   List<String> _buildings = [];
 
-  // Zone selection
+  // Zone selection (independent from building)
   String _zone = '';
   List<String> _zones = [];
 
@@ -97,12 +97,6 @@ class RecommendPageState extends State<RecommendPage> {
   String get _modeLabel => _modes[_mode]?.label ?? 'Balanced';
   IconData get _modeIcon => _modes[_mode]?.icon ?? Icons.balance;
   Color get _modeColor => _modes[_mode]?.color ?? Colors.blue;
-
-  /// Get buildings filtered by selected zone, or all buildings if no zone selected.
-  List<String> get _filteredBuildings {
-    if (_zone.isEmpty) return _buildings;
-    return _buildings.where((b) => ApDataService.isBuildingInZone(b, _zone)).toList();
-  }
 
   Future<void> _updateLoc() async {
     try { final p = await LocationService.getCurrentPosition(); setState(() { _locLabel = '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}'; }); } catch (_) { setState(() { _locLabel = 'Location unavailable'; }); }
@@ -220,7 +214,7 @@ class RecommendPageState extends State<RecommendPage> {
               ),
             ),
             const SizedBox(height: 12),
-            // Zone selector
+            // Zone selector (independent option)
             Card(
               margin: EdgeInsets.zero,
               child: Padding(
@@ -233,25 +227,12 @@ class RecommendPageState extends State<RecommendPage> {
                       child: DropdownButton<String>(
                         value: _zones.contains(_zone) ? _zone : '',
                         isExpanded: true,
-                        hint: const Text('All Zones', style: TextStyle(fontSize: 14)),
+                        hint: const Text('Zone (optional)', style: TextStyle(fontSize: 14)),
                         items: [
-                          const DropdownMenuItem(value: '', child: Text('All Zones', style: TextStyle(fontSize: 14))),
+                          const DropdownMenuItem(value: '', child: Text('Zone (optional)', style: TextStyle(fontSize: 14))),
                           ..._zones.map((z) => DropdownMenuItem(value: z, child: Text(z, style: const TextStyle(fontSize: 14)))),
                         ],
-                        onChanged: (v) {
-                          if (v != null) {
-                            setState(() {
-                              _zone = v;
-                              // Clear building if it doesn't belong to the selected zone
-                              if (_zone.isNotEmpty && _building.isNotEmpty &&
-                                  !ApDataService.isBuildingInZone(_building, _zone)) {
-                                _building = '';
-                                _saveBuilding('');
-                              }
-                            });
-                            _saveZone(v);
-                          }
-                        },
+                        onChanged: (v) { if (v != null) { setState(() => _zone = v); _saveZone(v); } },
                       ),
                     ),
                   ),
@@ -264,7 +245,7 @@ class RecommendPageState extends State<RecommendPage> {
               ),
             ),
             const SizedBox(height: 8),
-            // Building selector (filtered by zone)
+            // Building selector (independent option, shows all buildings)
             Card(
               margin: EdgeInsets.zero,
               child: Padding(
@@ -275,21 +256,12 @@ class RecommendPageState extends State<RecommendPage> {
                   Expanded(
                     child: DropdownButtonHideUnderline(
                       child: DropdownButton<String>(
-                        value: _filteredBuildings.contains(_building) ? _building : '',
+                        value: _buildings.contains(_building) ? _building : '',
                         isExpanded: true,
-                        hint: Text(
-                          _zone.isNotEmpty ? 'All Buildings in $_zone' : 'All Buildings',
-                          style: const TextStyle(fontSize: 14),
-                        ),
+                        hint: const Text('Building (optional)', style: TextStyle(fontSize: 14)),
                         items: [
-                          DropdownMenuItem(
-                            value: '',
-                            child: Text(
-                              _zone.isNotEmpty ? 'All Buildings in $_zone' : 'All Buildings',
-                              style: const TextStyle(fontSize: 14),
-                            ),
-                          ),
-                          ..._filteredBuildings.map((b) => DropdownMenuItem(value: b, child: Text(b, style: const TextStyle(fontSize: 14)))),
+                          const DropdownMenuItem(value: '', child: Text('Building (optional)', style: TextStyle(fontSize: 14))),
+                          ..._buildings.map((b) => DropdownMenuItem(value: b, child: Text(b, style: const TextStyle(fontSize: 14)))),
                         ],
                         onChanged: (v) { if (v != null) { setState(() => _building = v); _saveBuilding(v); } },
                       ),
