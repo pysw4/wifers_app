@@ -52,6 +52,10 @@ class RecommendPageState extends State<RecommendPage> {
   List<RecommendedAp> _results = [];
   List<String> _buildings = [];
 
+  // Zone selection
+  String _zone = '';
+  List<String> _zones = [];
+
   static const _modes = {
     'distance': _ModeDisplay('Distance Priority', Icons.near_me, Colors.green),
     'signal': _ModeDisplay('Signal Priority', Icons.signal_wifi_4_bar, Colors.orange),
@@ -65,19 +69,40 @@ class RecommendPageState extends State<RecommendPage> {
   Future<void> _loadSettings() async {
     final s = await StorageService.loadSettings();
     if (!mounted) return;
-    setState(() { _preferStable = s['preferStableAps'] ?? true; _radius = s['recommendRadiusMeters'] ?? 500; _mode = s['recommendMode'] as String? ?? 'balanced'; _building = s['selectedBuilding'] as String? ?? ''; });
+    setState(() {
+      _preferStable = s['preferStableAps'] ?? true;
+      _radius = s['recommendRadiusMeters'] ?? 500;
+      _mode = s['recommendMode'] as String? ?? 'balanced';
+      _building = s['selectedBuilding'] as String? ?? '';
+      _zone = s['selectedZone'] as String? ?? '';
+    });
   }
 
   Future<void> _saveMode(String m) async { final s = await StorageService.loadSettings(); s['recommendMode'] = m; await StorageService.saveSettings(s); }
   Future<void> _saveBuilding(String b) async { final s = await StorageService.loadSettings(); s['selectedBuilding'] = b; await StorageService.saveSettings(s); }
+  Future<void> _saveZone(String z) async { final s = await StorageService.loadSettings(); s['selectedZone'] = z; await StorageService.saveSettings(s); }
 
   Future<void> _loadBuildings() async {
-    try { setState(() { _buildings = await ApDataService.loadBuildings(); }); } catch (_) {}
+    try {
+      final b = await ApDataService.loadBuildings();
+      if (mounted) {
+        setState(() {
+          _buildings = b;
+          _zones = ApDataService.getZoneNames();
+        });
+      }
+    } catch (_) {}
   }
 
   String get _modeLabel => _modes[_mode]?.label ?? 'Balanced';
   IconData get _modeIcon => _modes[_mode]?.icon ?? Icons.balance;
   Color get _modeColor => _modes[_mode]?.color ?? Colors.blue;
+
+  /// Get buildings filtered by selected zone, or all buildings if no zone selected.
+  List<String> get _filteredBuildings {
+    if (_zone.isEmpty) return _buildings;
+    return _buildings.where((b) => ApDataService.isBuildingInZone(b, _zone)).toList();
+  }
 
   Future<void> _updateLoc() async {
     try { final p = await LocationService.getCurrentPosition(); setState(() { _locLabel = '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}'; }); } catch (_) { setState(() { _locLabel = 'Location unavailable'; }); }
@@ -164,40 +189,209 @@ class RecommendPageState extends State<RecommendPage> {
   Color _dbmToColor(double dbm) { final t = (dbm.clamp(-97, -22) + 97) / 75; return t > 0.66 ? Colors.green : t > 0.33 ? Colors.orange : Colors.red; }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('AP Recommendation'), backgroundColor: Theme.of(context).colorScheme.inversePrimary),
-    body: Padding(padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Row(children: [Icon(Icons.my_location, size: 16, color: Colors.grey[600]), const SizedBox(width: 6), Expanded(child: Text(_locLabel ?? 'Locating...', style: TextStyle(fontSize: 14, color: Colors.grey[600])))]),
-      const SizedBox(height: 8),
-      SizedBox(width: double.infinity, child: SegmentedButton<String>(segments: _modes.entries.map((e) => ButtonSegment(value: e.key, label: Text(e.value.label, style: const TextStyle(fontSize: 11)), icon: Icon(e.value.icon, size: 16))).toList(), selected: {_mode}, onSelectionChanged: (s) { setState(() => _mode = s.first); _saveMode(s.first); }, showSelectedIcon: false, style: ButtonStyle(visualDensity: VisualDensity.compact, tapTargetSize: MaterialTapTargetSize.shrinkWrap))),
-      const SizedBox(height: 12),
-      Card(margin: EdgeInsets.zero, child: Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4), child: Row(children: [
-        Icon(Icons.business, size: 18, color: Colors.grey[600]), const SizedBox(width: 8),
-        Expanded(child: DropdownButtonHideUnderline(child: DropdownButton<String>(value: _buildings.contains(_building) ? _building : '', isExpanded: true, hint: const Text('All Buildings', style: TextStyle(fontSize: 14)), items: [const DropdownMenuItem(value: '', child: Text('All Buildings', style: TextStyle(fontSize: 14))), ..._buildings.map((b) => DropdownMenuItem(value: b, child: Text(b, style: const TextStyle(fontSize: 14))))], onChanged: (v) { if (v != null) { setState(() => _building = v); _saveBuilding(v); } }))),
-        if (_building.isNotEmpty) GestureDetector(onTap: () { setState(() => _building = ''); _saveBuilding(''); }, child: Icon(Icons.close, size: 16, color: Colors.grey[400])),
-      ]))),
-      const SizedBox(height: 12),
-      Text(_status, style: const TextStyle(fontSize: 14, color: Colors.black54)), const SizedBox(height: 16),
-      SizedBox(width: double.infinity, child: ElevatedButton.icon(
-        onPressed: _loading ? null : _getRecommendation,
-        icon: _loading ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : Icon(_modeIcon),
-        label: Text(_loading ? 'Calculating...' : 'Find Best APs ($_modeLabel)'),
-        style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), backgroundColor: _modeColor, foregroundColor: Colors.white))),
-      const SizedBox(height: 16),
-      Expanded(child: _results.isEmpty
-        ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Icon(_modeIcon, size: 64, color: Colors.grey[300]), const SizedBox(height: 16), Text('No recommendations yet.\nTap the button above.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey[500]))]))
-        : ListView.builder(itemCount: _results.length, itemBuilder: (c, i) {
-            final a = _results[i]; final sc = _dbmToColor(a.signalDb);
-            return Card(margin: const EdgeInsets.symmetric(vertical: 6), child: ListTile(
-              leading: CircleAvatar(backgroundColor: _modeColor.withValues(alpha: 0.15), child: Text('${i+1}', style: TextStyle(fontWeight: FontWeight.bold, color: _modeColor))),
-              title: Text(a.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${a.building} • ${a.floor != null ? 'Floor ${a.floor}' : 'Floor unknown'}'), const SizedBox(height: 4),
-                Row(children: [Icon(Icons.near_me, size: 12, color: Colors.grey[600]), const SizedBox(width: 2), Text('${a.distance.toStringAsFixed(0)} m', style: TextStyle(fontSize: 11, color: Colors.grey[600])), const SizedBox(width: 12), Icon(Icons.signal_wifi_4_bar, size: 12, color: sc), const SizedBox(width: 2), Text('${a.signalDb.toStringAsFixed(1)} dBm', style: TextStyle(fontSize: 11, color: sc))])]),
-              trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
-                Row(mainAxisSize: MainAxisSize.min, children: [Icon(Icons.wifi, size: 14, color: a.prediction == 'Up' ? Colors.green : Colors.red), const SizedBox(width: 4), Text('${(a.score*100).toStringAsFixed(0)}%', style: TextStyle(fontWeight: FontWeight.bold, color: a.prediction == 'Up' ? Colors.green : Colors.red))]),
-                const SizedBox(height: 2), Text('${a.confidence.toStringAsFixed(2)} conf', style: TextStyle(fontSize: 10, color: Colors.grey[500]))]),
-              onTap: () => _navigateToAp(a)));
-          })),
-  ]))));
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('AP Recommendation'), backgroundColor: Theme.of(context).colorScheme.inversePrimary),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Location label
+            Row(children: [
+              Icon(Icons.my_location, size: 16, color: Colors.grey[600]),
+              const SizedBox(width: 6),
+              Expanded(child: Text(_locLabel ?? 'Locating...', style: TextStyle(fontSize: 14, color: Colors.grey[600]))),
+            ]),
+            const SizedBox(height: 8),
+            // Mode selector
+            SizedBox(
+              width: double.infinity,
+              child: SegmentedButton<String>(
+                segments: _modes.entries.map((e) => ButtonSegment(
+                  value: e.key,
+                  label: Text(e.value.label, style: const TextStyle(fontSize: 11)),
+                  icon: Icon(e.value.icon, size: 16),
+                )).toList(),
+                selected: {_mode},
+                onSelectionChanged: (s) { setState(() => _mode = s.first); _saveMode(s.first); },
+                showSelectedIcon: false,
+                style: ButtonStyle(visualDensity: VisualDensity.compact, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Zone selector
+            Card(
+              margin: EdgeInsets.zero,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Row(children: [
+                  Icon(Icons.map, size: 18, color: Colors.grey[600]),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _zones.contains(_zone) ? _zone : '',
+                        isExpanded: true,
+                        hint: const Text('All Zones', style: TextStyle(fontSize: 14)),
+                        items: [
+                          const DropdownMenuItem(value: '', child: Text('All Zones', style: TextStyle(fontSize: 14))),
+                          ..._zones.map((z) => DropdownMenuItem(value: z, child: Text(z, style: const TextStyle(fontSize: 14)))),
+                        ],
+                        onChanged: (v) {
+                          if (v != null) {
+                            setState(() {
+                              _zone = v;
+                              // Clear building if it doesn't belong to the selected zone
+                              if (_zone.isNotEmpty && _building.isNotEmpty &&
+                                  !ApDataService.isBuildingInZone(_building, _zone)) {
+                                _building = '';
+                                _saveBuilding('');
+                              }
+                            });
+                            _saveZone(v);
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                  if (_zone.isNotEmpty)
+                    GestureDetector(
+                      onTap: () { setState(() => _zone = ''); _saveZone(''); },
+                      child: Icon(Icons.close, size: 16, color: Colors.grey[400]),
+                    ),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Building selector (filtered by zone)
+            Card(
+              margin: EdgeInsets.zero,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Row(children: [
+                  Icon(Icons.business, size: 18, color: Colors.grey[600]),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: _filteredBuildings.contains(_building) ? _building : '',
+                        isExpanded: true,
+                        hint: Text(
+                          _zone.isNotEmpty ? 'All Buildings in $_zone' : 'All Buildings',
+                          style: const TextStyle(fontSize: 14),
+                        ),
+                        items: [
+                          DropdownMenuItem(
+                            value: '',
+                            child: Text(
+                              _zone.isNotEmpty ? 'All Buildings in $_zone' : 'All Buildings',
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                          ..._filteredBuildings.map((b) => DropdownMenuItem(value: b, child: Text(b, style: const TextStyle(fontSize: 14)))),
+                        ],
+                        onChanged: (v) { if (v != null) { setState(() => _building = v); _saveBuilding(v); } },
+                      ),
+                    ),
+                  ),
+                  if (_building.isNotEmpty)
+                    GestureDetector(
+                      onTap: () { setState(() => _building = ''); _saveBuilding(''); },
+                      child: Icon(Icons.close, size: 16, color: Colors.grey[400]),
+                    ),
+                ]),
+              ),
+            ),
+            const SizedBox(height: 12),
+            // Status text
+            Text(_status, style: const TextStyle(fontSize: 14, color: Colors.black54)),
+            const SizedBox(height: 16),
+            // Recommend button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _loading ? null : _getRecommendation,
+                icon: _loading
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                    : Icon(_modeIcon),
+                label: Text(_loading ? 'Calculating...' : 'Find Best APs ($_modeLabel)'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  backgroundColor: _modeColor,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            // Results list
+            Expanded(
+              child: _results.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(_modeIcon, size: 64, color: Colors.grey[300]),
+                          const SizedBox(height: 16),
+                          Text(
+                            'No recommendations yet.\nTap the button above.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.grey[500]),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      itemCount: _results.length,
+                      itemBuilder: (c, i) {
+                        final a = _results[i];
+                        final sc = _dbmToColor(a.signalDb);
+                        return Card(
+                          margin: const EdgeInsets.symmetric(vertical: 6),
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: _modeColor.withValues(alpha: 0.15),
+                              child: Text('${i+1}', style: TextStyle(fontWeight: FontWeight.bold, color: _modeColor)),
+                            ),
+                            title: Text(a.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('${a.building} • ${a.floor != null ? "Floor ${a.floor}" : "Floor unknown"}'),
+                                const SizedBox(height: 4),
+                                Row(children: [
+                                  Icon(Icons.near_me, size: 12, color: Colors.grey[600]),
+                                  const SizedBox(width: 2),
+                                  Text('${a.distance.toStringAsFixed(0)} m', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+                                  const SizedBox(width: 12),
+                                  Icon(Icons.signal_wifi_4_bar, size: 12, color: sc),
+                                  const SizedBox(width: 2),
+                                  Text('${a.signalDb.toStringAsFixed(1)} dBm', style: TextStyle(fontSize: 11, color: sc)),
+                                ]),
+                              ],
+                            ),
+                            trailing: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Row(mainAxisSize: MainAxisSize.min, children: [
+                                  Icon(Icons.wifi, size: 14, color: a.prediction == 'Up' ? Colors.green : Colors.red),
+                                  const SizedBox(width: 4),
+                                  Text('${(a.score*100).toStringAsFixed(0)}%', style: TextStyle(fontWeight: FontWeight.bold, color: a.prediction == 'Up' ? Colors.green : Colors.red)),
+                                ]),
+                                const SizedBox(height: 2),
+                                Text('${a.confidence.toStringAsFixed(2)} conf', style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+                              ],
+                            ),
+                            onTap: () => _navigateToAp(a),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }

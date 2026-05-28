@@ -33,7 +33,7 @@ class _PredictorPageState extends State<PredictorPage> {
 
   void _autoFillFeatures() {
     final now = DateTime.now();
-    _apNameController.text = widget.selectedAp!.name;
+    _apNameController.text = widget.selectedAp!.name ?? '';
     _hourController.text = now.hour.toDouble().toStringAsFixed(0);
   }
 

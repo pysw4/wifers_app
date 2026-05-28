@@ -32,11 +32,12 @@ wifers_app/
 │       ├── api_service.dart      # HTTP client for backend API
 │       ├── ap_data_service.dart  # GeoJSON data loader
 │       ├── cache_service.dart    # Two-layer cache (memory + persistent)
+│       ├── heatmap_asset_service.dart # Static heatmap file loader
 │       ├── location_service.dart # GPS location & campus detection
 │       └── storage_service.dart  # SharedPreferences persistence
 ├── main.py                       # FastAPI backend server
 ├── helper_script.py              # Graph routing & AP placement utilities
-├── precompute_heatmaps.py        # Pre-compute 48 heatmap JSON files
+├── precompute_heatmaps.py        # Pre-compute 168 heatmap JSON files (7 days × 24 hours)
 ├── retrain_classifier.py         # ML model retraining script
 ├── predict.py                    # Standalone prediction script
 ├── models/                       # Trained ML models
@@ -45,9 +46,14 @@ wifers_app/
 │   ├── signal_strength_model.joblib  # Signal strength regressor
 │   ├── signal_strength_meta.joblib   # Signal model metadata
 │   └── building_encoder.joblib   # Building name encoder
-├── precomputed/                  # Pre-computed heatmap JSON files
-│   ├── weekday/                  # 24 files (heatmap_h0.json ~ heatmap_h23.json)
-│   └── weekend/                  # 24 files (heatmap_h0.json ~ heatmap_h23.json)
+├── precomputed/                  # Pre-computed heatmap JSON files (7 days × 24 hours)
+│   ├── mon/                      # 24 files (heatmap_h0.json ~ heatmap_h23.json)
+│   ├── tue/                      # 24 files
+│   ├── wed/                      # 24 files
+│   ├── thu/                      # 24 files
+│   ├── fri/                      # 24 files
+│   ├── sat/                      # 24 files
+│   └── sun/                      # 24 files
 ├── geolocation_package/          # GeoJSON data & documentation
 │   └── data/
 │       └── aps_geolocalizados_wgs84.geojson  # AP locations
@@ -81,7 +87,7 @@ main.dart
   - AP detail bottom sheet with Navigate / 24h Trend / Favorite actions
   - Campus gate navigation fallback when user is outside campus
 - **Key Methods**:
-  - `_loadHeatmap()` - Fetches heatmap data from API with caching
+  - `_loadHeatmap()` - Loads heatmap from static files (web/heatmaps/) with API fallback
   - `_processHeatmapData()` - Parses AP points + smooth grid from response
   - `_navigateToAP()` - Routes to AP using advanced_route API
   - `_navigateFromGate()` - Routes from campus main entrance
@@ -143,7 +149,7 @@ main.dart
 - **Features**:
   - Line chart and bar chart views
   - Statistics (avg/max/min dBm, best/worst hour)
-  - Weekday vs weekend comparison
+  - Weekday vs weekend comparison (via compare endpoint)
 
 ### 2.3 Services
 
@@ -165,6 +171,11 @@ main.dart
 #### ApDataService (`lib/services/ap_data_service.dart`)
 - Loads AP data from bundled GeoJSON asset
 - Methods: `loadAllAps()`, `loadBuildings()`, `loadAllApsAsMaps()`
+
+#### HeatmapAssetService (`lib/services/heatmap_asset_service.dart`)
+- Loads precomputed heatmap JSON from static web assets
+- Methods: `loadHeatmap(day, hour)` - Returns heatmap data for given day/hour
+- Fallback: returns null on failure, allowing API fallback in MapPage
 
 #### LocationService (`lib/services/location_service.dart`)
 - UAB campus center: 41.503, 2.105 (radius: 1.2km)
@@ -220,10 +231,10 @@ class APInfo {
 | `/predict/batch` | POST | Batch AP status prediction |
 | `/route/{lat}/{lng}/{dest_lat}/{dest_lng}` | GET | Basic shortest-path routing |
 | `/route/advanced/{lat}/{lng}/{dest_lat}/{dest_lng}` | GET | Advanced routing with alternatives |
-| `/predict/signal_strength/heatmap` | GET | Heatmap data (auto weekday/weekend) |
+| `/predict/signal_strength/heatmap` | GET | Heatmap data (by day, mon-sun) |
 | `/predict/signal_strength/buildings` | GET | List available buildings |
 | `/predict/signal_strength/ap_trend/{ap_name}` | GET | 24h AP signal trend |
-| `/predict/signal_strength/ap_trend/{ap_name}/compare` | GET | Weekday vs weekend comparison |
+| `/predict/signal_strength/ap_trend/{ap_name}/compare` | GET | Weekday vs weekend comparison (via compare endpoint) |
 | `/cache/status` | GET | Cache statistics |
 
 **Key Functions**:
@@ -232,7 +243,7 @@ class APInfo {
 - `_build_feature_dataframe()` - Validates and converts feature dict to DataFrame
 - `_to_prediction_label()` - Converts model output to 'Up'/'Down' string
 - `_up_probability_from_proba()` - Extracts Up probability from model prediction
-- `_get_day_type()` - Returns 'weekday' or 'weekend' based on current date
+- `_get_day_type()` - Returns day name (mon-sun) based on current date
 - `_load_precomputed_heatmap()` - Loads heatmap JSON from cache or disk
 - `_build_ap_index()` - Builds AP name → hourly data index for fast trend queries
 
@@ -255,11 +266,11 @@ class APInfo {
 **Signal Strength Model** (`models/signal_strength_model.joblib`):
 - Predicts real signal strength in dBm
 - Features: building_code, floor, hour, band
-- Used by `precompute_heatmaps.py` to generate 48 heatmap files
+- Used by `precompute_heatmaps.py` to generate 168 heatmap files (7 days × 24 hours)
 
 ### 3.4 Precomputed Heatmaps (`precompute_heatmaps.py`)
 
-- Generates 48 JSON files (24 hours × 2 day types)
+- Generates 168 JSON files (7 days × 24 hours)
 - Each file contains:
   - `ap_points`: Signal strength for each AP point
   - `smooth_grid`: IDW-interpolated smooth grid (30×30 resolution)
@@ -274,11 +285,17 @@ class APInfo {
 ```
 User opens MapPage
   → _loadHeatmap() called in initState
+    → Determine current day (mon-sun) and hour (0-23)
+    → Try HeatmapAssetService.loadHeatmap(day, hour) first
+      → Loads from web/heatmaps/{day}/heatmap_h{hour}.json (static file)
+      → Success: process data directly
+      → Fail: fallback to API
+        → GET /predict/signal_strength/heatmap?hour={h}&day={day}
+          → Backend loads from precomputed/{day}/heatmap_h{h}.json
+          → Returns AP points + smooth grid
     → Check CacheService for cached heatmap data
       → Cache hit: process cached data
-      → Cache miss: GET /predict/signal_strength/heatmap?hour={h}
-        → Backend loads from precomputed/{day_type}/heatmap_h{h}.json
-        → Returns AP points + smooth grid
+      → Cache miss: process from source
       → Cache result (30 min TTL)
     → _processHeatmapData():
       → Parse AP points into _heatmapCache (Map<ap_name, signal_data>)
@@ -360,7 +377,7 @@ python retrain_classifier.py
 ```bash
 # After model retraining or GeoJSON updates:
 python precompute_heatmaps.py
-# Output: precomputed/weekday/*.json + precomputed/weekend/*.json (48 files)
+# Output: precomputed/{mon..sun}/heatmap_h{0..23}.json (168 files)
 ```
 
 ### 6.3 Updating AP Locations

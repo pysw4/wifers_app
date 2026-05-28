@@ -1,7 +1,9 @@
-# 修复 Heatmap/Trend 500 错误
+# Task Progress
 
-- [x] 分析问题：_load_merged_heatmap() 要求 7 个合并文件，但实际只有 weekday/weekend 目录
-- [ ] 修改 _load_merged_heatmap() 兼容现有 weekday/weekend 目录结构
-- [ ] 修改 _get_hourly_data() 从旧文件格式读取
-- [ ] 修改 _build_ap_trend_index() 从旧文件格式构建索引
-- [ ] 修改 _get_day_name() 为 _get_day_type() 返回 weekday/weekend
+- [x] 分析 map_page 和 recommend_page 代码结构
+- [x] 从 map_page.dart 中移除 recommend 模式相关代码
+- [x] 验证代码编译无误
+- [ ] 在 ApDataService 中添加加载区域(zone)数据的方法
+- [ ] 在 recommend_page 中添加区域选择器
+- [ ] 区域选择联动建筑筛选
+- [ ] 验证代码编译无误

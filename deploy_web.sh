@@ -3,7 +3,7 @@
 set -e
 
 echo "🔨 Building Flutter Web..."
-flutter build web --release
+flutter build web --release --base-href /wifers_app/
 
 echo "📂 Copying heatmap static files..."
 cp -r web/heatmaps build/web/heatmaps
