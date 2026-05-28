@@ -39,6 +39,10 @@ class _BookingPageState extends State<BookingPage> {
   BestSlot? _bestSlot;
   int _durationHours = 2;
 
+  // Availability grid
+  List<HourAvailability> _availabilityHours = [];
+  bool _availabilityLoading = false;
+
   static const _perfOptions = ['Fair', 'Good', 'Excellent'];
   static const _perfColors = {
     'Fair': Colors.orange,
@@ -203,6 +207,27 @@ class _BookingPageState extends State<BookingPage> {
     }
   }
 
+  Future<void> _loadAvailability() async {
+    final roomCode = _roomCodeController.text.trim().toUpperCase();
+    if (roomCode.isEmpty) return;
+
+    setState(() => _availabilityLoading = true);
+    try {
+      final resp = await _api.getBookingAvailability(
+        roomCode,
+        _formatDate(_selectedDate),
+      );
+      final hours = (resp['hours'] as List)
+          .map((h) => HourAvailability.fromJson(h as Map<String, dynamic>))
+          .toList();
+      setState(() => _availabilityHours = hours);
+    } catch (e) {
+      // Silently fail – availability is non-critical
+    } finally {
+      setState(() => _availabilityLoading = false);
+    }
+  }
+
   Future<void> _loadAlternatives() async {
     final roomCode = _roomCodeController.text.trim().toUpperCase();
     final nStudents = int.tryParse(_nStudentsController.text.trim()) ?? 30;
@@ -339,6 +364,23 @@ class _BookingPageState extends State<BookingPage> {
           Expanded(child: Text(value)),
         ],
       ),
+    );
+  }
+
+  Widget _availabilityDot(Color color, String label) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10, height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(label, style: const TextStyle(fontSize: 11)),
+      ],
     );
   }
 
@@ -531,6 +573,121 @@ class _BookingPageState extends State<BookingPage> {
                 ),
               ),
             ),
+            // Availability grid
+            if (_roomCodeController.text.trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _availabilityLoading ? null : _loadAvailability,
+                      icon: _availabilityLoading
+                          ? const SizedBox(
+                              width: 16, height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.calendar_view_week, size: 18),
+                      label: const Text('Show Availability'),
+                    ),
+                    if (_availabilityHours.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: Text(
+                          '${_availabilityHours.where((h) => h.available).length} free slots',
+                          style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+
+            // Availability grid display
+            if (_availabilityHours.isNotEmpty)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.grey[300]!),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Text('Slot Availability',
+                            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                        const Spacer(),
+                        Row(
+                          children: [
+                            _availabilityDot(Colors.green, 'Free'),
+                            const SizedBox(width: 8),
+                            _availabilityDot(Colors.red, 'Booked'),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        children: _availabilityHours.map((h) {
+                          final isSelected = h.hour >= _startHour && h.hour < _endHour;
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 4),
+                            child: GestureDetector(
+                              onTap: h.available
+                                  ? () {
+                                      setState(() {
+                                        _startHour = h.hour;
+                                        _endHour = h.hour + 1;
+                                      });
+                                    }
+                                  : null,
+                              child: Container(
+                                width: 36,
+                                padding: const EdgeInsets.symmetric(vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? Colors.indigo
+                                      : h.available
+                                          ? Colors.green[100]
+                                          : Colors.red[100],
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: isSelected
+                                      ? Border.all(color: Colors.indigo[800]!, width: 2)
+                                      : null,
+                                ),
+                                child: Column(
+                                  children: [
+                                    Text(
+                                      '${h.hour.toString().padLeft(2, '0')}',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                        color: isSelected
+                                            ? Colors.white
+                                            : h.available
+                                                ? Colors.green[800]
+                                                : Colors.red[800],
+                                      ),
+                                    ),
+                                    Text(
+                                      h.available ? '🟢' : '🔴',
+                                      style: const TextStyle(fontSize: 10),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
             const SizedBox(height: 8),
 
             // Suggest best slot section

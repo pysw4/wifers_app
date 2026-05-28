@@ -105,3 +105,17 @@ class BestSlot {
     );
   }
 }
+
+class HourAvailability {
+  final int hour;
+  final bool available;
+
+  HourAvailability({required this.hour, required this.available});
+
+  factory HourAvailability.fromJson(Map<String, dynamic> json) {
+    return HourAvailability(
+      hour: json['hour'] as int,
+      available: json['available'] as bool,
+    );
+  }
+}
