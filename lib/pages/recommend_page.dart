@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:wifers_app/services/api_service.dart' show ApiService, ApiException;
 import 'package:wifers_app/services/ap_data_service.dart';
@@ -45,16 +46,16 @@ class _ModeDisplay { final String label; final IconData icon; final Color color;
 
 class RecommendPageState extends State<RecommendPage> {
   final _api = ApiService();
-  bool _loading = false, _preferStable = true, _useGate = false;
+  final MapController _mapController = MapController();
+
+  bool _loading = false, _preferStable = true;
   String _status = 'Waiting for recommendation', _mode = 'balanced', _building = '';
-  String? _locLabel;
-  int _radius = 500;
   List<RecommendedAp> _results = [];
   List<String> _buildings = [];
 
-  // Zone selection (independent from building)
-  String _zone = '';
-  List<String> _zones = [];
+  // Map-based search area
+  LatLng _searchCenter = const LatLng(41.503, 2.105); // UAB campus center default
+  double _searchRadiusMeters = 300;
 
   static const _modes = {
     'distance': _ModeDisplay('Distance Priority', Icons.near_me, Colors.green),
@@ -62,8 +63,14 @@ class RecommendPageState extends State<RecommendPage> {
     'balanced': _ModeDisplay('Balanced', Icons.balance, Colors.blue),
   };
 
+  // Campus bounds for map constraint
+  static final LatLngBounds _campusBounds = LatLngBounds(
+    const LatLng(41.492, 2.092),
+    const LatLng(41.514, 2.118),
+  );
+
   @override
-  void initState() { super.initState(); _loadSettings(); _loadBuildings(); _updateLoc(); }
+  void initState() { super.initState(); _loadSettings(); _loadBuildings(); _initSearchCenter(); }
   void reloadSettings() => _loadSettings();
 
   Future<void> _loadSettings() async {
@@ -71,36 +78,37 @@ class RecommendPageState extends State<RecommendPage> {
     if (!mounted) return;
     setState(() {
       _preferStable = s['preferStableAps'] ?? true;
-      _radius = s['recommendRadiusMeters'] ?? 500;
       _mode = s['recommendMode'] as String? ?? 'balanced';
       _building = s['selectedBuilding'] as String? ?? '';
-      _zone = s['selectedZone'] as String? ?? '';
     });
   }
 
   Future<void> _saveMode(String m) async { final s = await StorageService.loadSettings(); s['recommendMode'] = m; await StorageService.saveSettings(s); }
   Future<void> _saveBuilding(String b) async { final s = await StorageService.loadSettings(); s['selectedBuilding'] = b; await StorageService.saveSettings(s); }
-  Future<void> _saveZone(String z) async { final s = await StorageService.loadSettings(); s['selectedZone'] = z; await StorageService.saveSettings(s); }
+
+  Future<void> _initSearchCenter() async {
+    try {
+      final p = await LocationService.getCurrentPosition();
+      if (mounted) {
+        setState(() {
+          _searchCenter = LatLng(p.latitude, p.longitude);
+        });
+      }
+    } catch (_) {
+      // Keep campus center default
+    }
+  }
 
   Future<void> _loadBuildings() async {
     try {
       final b = await ApDataService.loadBuildings();
-      if (mounted) {
-        setState(() {
-          _buildings = b;
-          _zones = ApDataService.getZoneNames();
-        });
-      }
+      if (mounted) setState(() => _buildings = b);
     } catch (_) {}
   }
 
   String get _modeLabel => _modes[_mode]?.label ?? 'Balanced';
   IconData get _modeIcon => _modes[_mode]?.icon ?? Icons.balance;
   Color get _modeColor => _modes[_mode]?.color ?? Colors.blue;
-
-  Future<void> _updateLoc() async {
-    try { final p = await LocationService.getCurrentPosition(); setState(() { _locLabel = '${p.latitude.toStringAsFixed(5)}, ${p.longitude.toStringAsFixed(5)}'; }); } catch (_) { setState(() { _locLabel = 'Location unavailable'; }); }
-  }
 
   Future<bool> _showGateDialog(String title, String content) async {
     if (!mounted) return false;
@@ -113,23 +121,9 @@ class RecommendPageState extends State<RecommendPage> {
   Future<void> _getRecommendation() async {
     setState(() { _loading = true; _status = 'Calculating...'; _results = []; });
     try {
-      LatLng pos;
-      try {
-        final p = await LocationService.getCurrentPosition(); pos = LatLng(p.latitude, p.longitude);
-        if (!LocationService.isNearCampus(pos)) {
-          if (!await _showGateDialog('Outside Campus', 'You are outside the UAB campus. Use the campus main entrance?')) {
-            if (mounted) setState(() { _status = 'Cancelled.'; _loading = false; }); return;
-          }
-          pos = LocationService.campusGate; _useGate = true;
-        }
-      } catch (_) {
-        if (!await _showGateDialog('Location Unavailable', 'Could not determine your location. Use campus main entrance?')) {
-          if (mounted) setState(() { _status = 'Cancelled.'; _loading = false; }); return;
-        }
-        pos = LocationService.campusGate; _useGate = true;
-      }
+      final pos = _searchCenter;
 
-      final ck = 'recommend_${pos.latitude.toStringAsFixed(4)}_${pos.longitude.toStringAsFixed(4)}_${_building.isNotEmpty ? _building : 'all'}_$_radius$_preferStable$_mode${_useGate ? '_gate' : ''}';
+      final ck = 'recommend_${pos.latitude.toStringAsFixed(4)}_${pos.longitude.toStringAsFixed(4)}_${_building.isNotEmpty ? _building : 'all'}_${_searchRadiusMeters.toInt()}$_preferStable$_mode';
       final settings = await StorageService.loadSettings();
       final cached = await CacheService.get<String>(ck, ttl: Duration(minutes: settings['cacheDurationMinutes'] as int? ?? 60));
       if (cached != null) {
@@ -138,7 +132,11 @@ class RecommendPageState extends State<RecommendPage> {
         return;
       }
 
-      final resp = await _api.recommendAPs(lat: pos.latitude, lng: pos.longitude, radius: _radius, mode: _mode, building: _building, preferStable: _preferStable);
+      final resp = await _api.recommendAPs(
+        lat: pos.latitude, lng: pos.longitude,
+        radius: _searchRadiusMeters.toInt(),
+        mode: _mode, building: _building, preferStable: _preferStable,
+      );
       final recs = (resp['recommendations'] as List?)?.map((e) => RecommendedAp.fromJson(e as Map<String, dynamic>)).toList() ?? [];
       await CacheService.set(ck, jsonEncode(recs.map((a) => {'id':a.id,'name':a.name,'building':a.building,'floor':a.floor,'lat':a.lat,'lng':a.lng,'distance':a.distance,'prediction':a.prediction,'confidence':a.confidence,'score':a.score,'signal_db':a.signalDb,'signal_quality':a.signalQuality,'bars':a.bars,'up_probability':a.upProbability}).toList()));
       setState(() { _results = recs; _status = 'Top ${recs.length} recommendations ($_modeLabel).'; });
@@ -191,13 +189,6 @@ class RecommendPageState extends State<RecommendPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Location label
-            Row(children: [
-              Icon(Icons.my_location, size: 16, color: Colors.grey[600]),
-              const SizedBox(width: 6),
-              Expanded(child: Text(_locLabel ?? 'Locating...', style: TextStyle(fontSize: 14, color: Colors.grey[600]))),
-            ]),
-            const SizedBox(height: 8),
             // Mode selector
             SizedBox(
               width: double.infinity,
@@ -213,39 +204,107 @@ class RecommendPageState extends State<RecommendPage> {
                 style: ButtonStyle(visualDensity: VisualDensity.compact, tapTargetSize: MaterialTapTargetSize.shrinkWrap),
               ),
             ),
-            const SizedBox(height: 12),
-            // Zone selector (independent option)
+            const SizedBox(height: 8),
+            // Mini map for area selection
             Card(
               margin: EdgeInsets.zero,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                child: Row(children: [
-                  Icon(Icons.map, size: 18, color: Colors.grey[600]),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: DropdownButtonHideUnderline(
-                      child: DropdownButton<String>(
-                        value: _zones.contains(_zone) ? _zone : '',
-                        isExpanded: true,
-                        hint: const Text('Zone (optional)', style: TextStyle(fontSize: 14)),
-                        items: [
-                          const DropdownMenuItem(value: '', child: Text('Zone (optional)', style: TextStyle(fontSize: 14))),
-                          ..._zones.map((z) => DropdownMenuItem(value: z, child: Text(z, style: const TextStyle(fontSize: 14)))),
-                        ],
-                        onChanged: (v) { if (v != null) { setState(() => _zone = v); _saveZone(v); } },
+              clipBehavior: Clip.antiAlias,
+              child: SizedBox(
+                height: 250,
+                child: Stack(
+                  children: [
+                    FlutterMap(
+                      mapController: _mapController,
+                      options: MapOptions(
+                        initialCenter: _searchCenter,
+                        initialZoom: 15.5,
+                        minZoom: 14.5,
+                        maxZoom: 18.0,
+                        cameraConstraint: CameraConstraint.contain(bounds: _campusBounds),
+                        onTap: (tapPos, latlng) {
+                          setState(() => _searchCenter = latlng);
+                        },
+                      ),
+                      children: [
+                        TileLayer(
+                          urlTemplate: 'https://a.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png',
+                          userAgentPackageName: 'com.uab.wifers',
+                        ),
+                        // Search radius circle
+                        CircleLayer(
+                          circles: [
+                            CircleMarker(
+                              point: _searchCenter,
+                              radius: _searchRadiusMeters,
+                              color: Colors.blue.withValues(alpha: 0.12),
+                              borderColor: Colors.blue.withValues(alpha: 0.4),
+                              borderStrokeWidth: 2,
+                            ),
+                          ],
+                        ),
+                        // Center pin marker
+                        MarkerLayer(
+                          markers: [
+                            Marker(
+                              point: _searchCenter,
+                              width: 40,
+                              height: 40,
+                              child: const Icon(Icons.location_on, color: Colors.blue, size: 36),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    // Top-left info overlay
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'Tap map to set center',
+                          style: TextStyle(fontSize: 11, color: Colors.grey[700]),
+                        ),
                       ),
                     ),
-                  ),
-                  if (_zone.isNotEmpty)
-                    GestureDetector(
-                      onTap: () { setState(() => _zone = ''); _saveZone(''); },
-                      child: Icon(Icons.close, size: 16, color: Colors.grey[400]),
-                    ),
-                ]),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 8),
-            // Building selector (independent option, shows all buildings)
+            // Radius slider
+            Row(children: [
+              const Icon(Icons.radio_button_unchecked, size: 16, color: Colors.blue),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Slider(
+                  value: _searchRadiusMeters,
+                  min: 50,
+                  max: 1000,
+                  divisions: 19,
+                  label: '${_searchRadiusMeters.toInt()} m',
+                  onChanged: (v) => setState(() => _searchRadiusMeters = v),
+                ),
+              ),
+              SizedBox(
+                width: 60,
+                child: Text('${_searchRadiusMeters.toInt()} m', style: const TextStyle(fontSize: 13)),
+              ),
+            ]),
+            // Center coordinates display
+            Padding(
+              padding: const EdgeInsets.only(left: 24, bottom: 4),
+              child: Text(
+                'Center: ${_searchCenter.latitude.toStringAsFixed(5)}, ${_searchCenter.longitude.toStringAsFixed(5)}',
+                style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+              ),
+            ),
+            const SizedBox(height: 4),
+            // Building selector
             Card(
               margin: EdgeInsets.zero,
               child: Padding(
@@ -275,10 +334,10 @@ class RecommendPageState extends State<RecommendPage> {
                 ]),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             // Status text
             Text(_status, style: const TextStyle(fontSize: 14, color: Colors.black54)),
-            const SizedBox(height: 16),
+            const SizedBox(height: 8),
             // Recommend button
             SizedBox(
               width: double.infinity,
@@ -295,7 +354,7 @@ class RecommendPageState extends State<RecommendPage> {
                 ),
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             // Results list
             Expanded(
               child: _results.isEmpty
