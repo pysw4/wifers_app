@@ -451,9 +451,9 @@ class _MapPageState extends State<MapPage> {
     final zoom = _currentZoom;
 
     if (isHeatmap) {
-      if (zoom >= 18) return 24;
-      if (zoom >= 16) return 18;
-      if (zoom >= 14) return 14;
+      if (zoom >= 18) return 32;
+      if (zoom >= 16) return 24;
+      if (zoom >= 14) return 16;
       if (zoom >= 12) return 10;
       return 8; // zoom < 12，即使热力图也变小
     }
@@ -1295,8 +1295,8 @@ class _MapPageState extends State<MapPage> {
           LatLng(lat + halfLat, lng + halfLng),
           LatLng(lat + halfLat, lng - halfLng),
         ],
-        color: color.withValues(alpha: 0.35),
-        borderColor: color.withValues(alpha: 0.12),
+        color: color.withValues(alpha: 0.18),
+        borderColor: color.withValues(alpha: 0.06),
         borderStrokeWidth: 0.5,
       );
     }).toList();
