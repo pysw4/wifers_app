@@ -728,7 +728,8 @@ async def get_ap_daily_trend(ap_name: str):
         # --- Interpolate missing hours to get a full 24-hour curve ---
         # Build a complete 0..23 array, filling gaps with linear interpolation
         full_actual = {}
-        actual_hours = sorted(hourly_actual.keys())
+        # Convert string keys to int for comparison
+        actual_hours = sorted(int(k) for k in hourly_actual.keys())
         
         if len(actual_hours) >= 2:
             # Interpolate between known points
@@ -747,8 +748,8 @@ async def get_ap_daily_trend(ap_name: str):
                     if before and after:
                         h_before = before[-1]
                         h_after = after[0]
-                        v_before = hourly_actual[h_before]["actual_mean"]
-                        v_after = hourly_actual[h_after]["actual_mean"]
+                        v_before = hourly_actual[str(h_before)]["actual_mean"]
+                        v_after = hourly_actual[str(h_after)]["actual_mean"]
                         # Linear interpolation
                         ratio = (h - h_before) / (h_after - h_before)
                         interpolated = v_before + (v_after - v_before) * ratio
@@ -760,29 +761,29 @@ async def get_ap_daily_trend(ap_name: str):
                     elif before and not after:
                         # Extrapolate from last known value (flat)
                         full_actual[h] = {
-                            "actual_mean": hourly_actual[before[-1]]["actual_mean"],
+                            "actual_mean": hourly_actual[str(before[-1])]["actual_mean"],
                             "samples": 0,
                             "interpolated": True,
                         }
                     elif after and not before:
                         # Extrapolate from first known value (flat)
                         full_actual[h] = {
-                            "actual_mean": hourly_actual[after[0]]["actual_mean"],
+                            "actual_mean": hourly_actual[str(after[0])]["actual_mean"],
                             "samples": 0,
                             "interpolated": True,
                         }
         elif len(actual_hours) == 1:
             # Only one hour known — use it for all hours
             single_h = actual_hours[0]
-            single_v = hourly_actual[single_h]["actual_mean"]
+            single_v = hourly_actual[str(single_h)]["actual_mean"]
             for h in range(24):
                 full_actual[h] = {
                     "actual_mean": single_v,
-                    "samples": hourly_actual[single_h]["samples"] if h == single_h else 0,
+                    "samples": hourly_actual[str(single_h)]["samples"] if h == single_h else 0,
                     "interpolated": h != single_h,
                 }
         else:
-            full_actual = {h: v for h, v in hourly_actual.items()}
+            full_actual = {int(k): v for k, v in hourly_actual.items()}
         
         # Now build comparison using the full 24-hour actual data
         diffs = []
