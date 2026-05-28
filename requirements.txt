@@ -30,6 +30,7 @@ pillow==12.1.1
 pydantic==2.12.5
 pydantic_core==2.41.5
 pygame-ce==2.5.7
+python-multipart==0.0.20
 pyogrio==0.12.1
 pyparsing==3.3.2
 pyproj==3.7.2
