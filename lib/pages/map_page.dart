@@ -1348,8 +1348,8 @@ class _MapPageState extends State<MapPage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: const [
-                    Text('Weak', style: TextStyle(fontSize: 9, color: Colors.grey)),
-                    Text('Strong', style: TextStyle(fontSize: 9, color: Colors.grey)),
+                    Text('Worse', style: TextStyle(fontSize: 9, color: Colors.grey)),
+                    Text('Better', style: TextStyle(fontSize: 9, color: Colors.grey)),
                   ],
                 ),
                 const Divider(height: 8),
