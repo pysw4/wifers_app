@@ -821,74 +821,77 @@ class _MapPageState extends State<MapPage> {
 
     showModalBottomSheet(
       context: context,
-      builder: (context) => Container(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              ap.name ?? 'AP',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text('${ap.building}, Floor ${ap.height ?? 0}'),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.wifi, color: color),
-                const SizedBox(width: 8),
-                Text(
-                  'Status: $predictedStatus',
-                  style: TextStyle(color: color, fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            if (signalDb != null) ...[
-              const SizedBox(height: 8),
+      isScrollControlled: true,
+      builder: (context) => SingleChildScrollView(
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                ap.name ?? 'AP',
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 6),
+              Text('${ap.building}, Floor ${ap.height ?? 0}'),
+              const SizedBox(height: 6),
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(
-                    Icons.signal_wifi_4_bar,
-                    color: _dbmToColor(signalDb),
-                  ),
+                  Icon(Icons.wifi, color: color),
                   const SizedBox(width: 8),
                   Text(
-                    'Signal: ${signalDb.toStringAsFixed(1)} dBm',
-                    style: TextStyle(
+                    'Status: $predictedStatus',
+                    style: TextStyle(color: color, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              if (signalDb != null) ...[
+                const SizedBox(height: 6),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.signal_wifi_4_bar,
                       color: _dbmToColor(signalDb),
-                      fontWeight: FontWeight.bold,
                     ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Signal: ${signalDb.toStringAsFixed(1)} dBm',
+                      style: TextStyle(
+                        color: _dbmToColor(signalDb),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 12),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _buildActionButton(
+                    icon: Icons.directions,
+                    label: 'Navigate',
+                    color: Colors.blue,
+                    onPressed: () => _navigateToAP(ap),
+                  ),
+                  _buildActionButton(
+                    icon: Icons.trending_up,
+                    label: '24h Trend',
+                    color: Colors.orange,
+                    onPressed: () => _showAPTrend(ap),
+                  ),
+                  _buildActionButton(
+                    icon: Icons.favorite,
+                    label: 'Favorite',
+                    color: Colors.red,
+                    onPressed: () => _favoriteAP(ap),
                   ),
                 ],
               ),
             ],
-            const SizedBox(height: 16),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                _buildActionButton(
-                  icon: Icons.directions,
-                  label: 'Navigate',
-                  color: Colors.blue,
-                  onPressed: () => _navigateToAP(ap),
-                ),
-                _buildActionButton(
-                  icon: Icons.trending_up,
-                  label: '24h Trend',
-                  color: Colors.orange,
-                  onPressed: () => _showAPTrend(ap),
-                ),
-                _buildActionButton(
-                  icon: Icons.favorite,
-                  label: 'Favorite',
-                  color: Colors.red,
-                  onPressed: () => _favoriteAP(ap),
-                ),
-              ],
-            ),
-          ],
+          ),
         ),
       ),
     );
