@@ -783,36 +783,44 @@ class _BookingPageState extends State<BookingPage> {
                           '${b.date} • ${b.startHour}:00-${b.endHour}:00 • ${b.nStudents} students',
                           style: const TextStyle(fontSize: 11),
                         ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (b.predictedPerformance != null)
-                              Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: (_perfColors[b.predictedPerformance] ??
-                                          Colors.grey)
-                                      .withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(
-                                  b.predictedPerformance!,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    color: _perfColors[
-                                        b.predictedPerformance],
-                                    fontWeight: FontWeight.w500,
+                        trailing: SizedBox(
+                          width: 90,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (b.predictedPerformance != null)
+                                Flexible(
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 4, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: (_perfColors[b.predictedPerformance] ??
+                                              Colors.grey)
+                                          .withValues(alpha: 0.15),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      b.predictedPerformance!,
+                                      style: TextStyle(
+                                        fontSize: 10,
+                                        color: _perfColors[
+                                            b.predictedPerformance],
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
                                   ),
                                 ),
+                              const SizedBox(width: 2),
+                              IconButton(
+                                icon: const Icon(Icons.cancel_outlined,
+                                    size: 18, color: Colors.red),
+                                onPressed: () => _cancelBooking(b.bookingId),
+                                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                padding: EdgeInsets.zero,
                               ),
-                            const SizedBox(width: 4),
-                            IconButton(
-                              icon: const Icon(Icons.cancel_outlined,
-                                  size: 18, color: Colors.red),
-                              onPressed: () => _cancelBooking(b.bookingId),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     )),

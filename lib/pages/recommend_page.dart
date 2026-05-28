@@ -446,15 +446,19 @@ class RecommendPageState extends State<RecommendPage> {
                               children: [
                                 Text('${a.building} • ${a.floor != null ? "Floor ${a.floor}" : "Floor unknown"}'),
                                 const SizedBox(height: 4),
-                                Row(children: [
-                                  Icon(Icons.near_me, size: 12, color: Colors.grey[600]),
-                                  const SizedBox(width: 2),
-                                  Text('${a.distance.toStringAsFixed(0)} m', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
-                                  const SizedBox(width: 12),
-                                  Icon(Icons.signal_wifi_4_bar, size: 12, color: sc),
-                                  const SizedBox(width: 2),
-                                  Text('${a.signalDb.toStringAsFixed(1)} dBm', style: TextStyle(fontSize: 11, color: sc)),
-                                ]),
+                                Wrap(
+                                  spacing: 4,
+                                  runSpacing: 2,
+                                  children: [
+                                    Icon(Icons.near_me, size: 12, color: Colors.grey[600]),
+                                    const SizedBox(width: 2),
+                                    Text('${a.distance.toStringAsFixed(0)} m', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+                                    const SizedBox(width: 8),
+                                    Icon(Icons.signal_wifi_4_bar, size: 12, color: sc),
+                                    const SizedBox(width: 2),
+                                    Text('${a.signalDb.toStringAsFixed(1)} dBm', style: TextStyle(fontSize: 11, color: sc)),
+                                  ],
+                                ),
                               ],
                             ),
                             trailing: Column(

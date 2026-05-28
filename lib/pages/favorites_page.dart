@@ -221,46 +221,55 @@ class _FavoritesPageState extends State<FavoritesPage> {
                             ),
                           ],
                         ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.directions, color: Colors.blue),
-                              tooltip: 'Navigate',
-                              onPressed: () => _navigateToAP(ap),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.analytics, color: Colors.green),
-                              tooltip: 'Predict Status',
-                              onPressed: () => _predictAP(ap),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.delete, color: Colors.red),
-                              tooltip: 'Remove from favorites',
-                              onPressed: () {
-                                showDialog(
-                                  context: context,
-                                  builder: (context) => AlertDialog(
-                                    title: const Text('Remove Favorite'),
-                                    content: Text('Remove ${ap.name ?? 'AP'} from favorites?'),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () => Navigator.pop(context),
-                                        child: const Text('Cancel'),
-                                      ),
-                                      TextButton(
-                                        onPressed: () {
-                                          Navigator.pop(context);
-                                          _removeFavorite(ap);
-                                        },
-                                        child: const Text('Remove'),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                            ),
-                          ],
+                        trailing: SizedBox(
+                          width: 108,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.directions, color: Colors.blue),
+                                tooltip: 'Navigate',
+                                onPressed: () => _navigateToAP(ap),
+                                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                padding: EdgeInsets.zero,
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.analytics, color: Colors.green),
+                                tooltip: 'Predict Status',
+                                onPressed: () => _predictAP(ap),
+                                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                padding: EdgeInsets.zero,
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.delete, color: Colors.red),
+                                tooltip: 'Remove from favorites',
+                                onPressed: () {
+                                  showDialog(
+                                    context: context,
+                                    builder: (context) => AlertDialog(
+                                      title: const Text('Remove Favorite'),
+                                      content: Text('Remove ${ap.name ?? 'AP'} from favorites?'),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () => Navigator.pop(context),
+                                          child: const Text('Cancel'),
+                                        ),
+                                        TextButton(
+                                          onPressed: () {
+                                            Navigator.pop(context);
+                                            _removeFavorite(ap);
+                                          },
+                                          child: const Text('Remove'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
+                                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                padding: EdgeInsets.zero,
+                              ),
+                            ],
+                          ),
                         ),
                         isThreeLine: true,
                       ),

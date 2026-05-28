@@ -875,8 +875,9 @@ class _MapPageState extends State<MapPage> {
                 ),
               ],
               const SizedBox(height: 12),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              Wrap(
+                alignment: WrapAlignment.spaceEvenly,
+                runSpacing: 4,
                 children: [
                   _buildActionButton(
                     icon: Icons.directions,

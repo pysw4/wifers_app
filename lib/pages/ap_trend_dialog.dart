@@ -269,17 +269,26 @@ class _APTrendDialogState extends State<APTrendDialog> {
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: Colors.grey[200]!),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _buildStatItem(Icons.show_chart, 'Avg', '${avg?.toStringAsFixed(1) ?? "-"} dBm', _dbmToColor(avg?.toDouble() ?? -70)),
-          _buildStatItem(Icons.arrow_upward, 'Best', '${maxDb?.toStringAsFixed(1) ?? "-"} dBm', Colors.green),
-          _buildStatItem(Icons.arrow_downward, 'Worst', '${minDb?.toStringAsFixed(1) ?? "-"} dBm', Colors.red),
-          if (bestHour != null)
-            _buildStatItem(Icons.access_time, 'Peak', '${bestHour}:00', Colors.blue),
-          if (worstHour != null)
-            _buildStatItem(Icons.access_time, 'Low', '${worstHour}:00', Colors.orange),
-        ],
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildStatItem(Icons.show_chart, 'Avg', '${avg?.toStringAsFixed(1) ?? "-"} dBm', _dbmToColor(avg?.toDouble() ?? -70)),
+            const SizedBox(width: 12),
+            _buildStatItem(Icons.arrow_upward, 'Best', '${maxDb?.toStringAsFixed(1) ?? "-"} dBm', Colors.green),
+            const SizedBox(width: 12),
+            _buildStatItem(Icons.arrow_downward, 'Worst', '${minDb?.toStringAsFixed(1) ?? "-"} dBm', Colors.red),
+            if (bestHour != null) ...[
+              const SizedBox(width: 12),
+              _buildStatItem(Icons.access_time, 'Peak', '${bestHour}:00', Colors.blue),
+            ],
+            if (worstHour != null) ...[
+              const SizedBox(width: 12),
+              _buildStatItem(Icons.access_time, 'Low', '${worstHour}:00', Colors.orange),
+            ],
+          ],
+        ),
       ),
     );
   }

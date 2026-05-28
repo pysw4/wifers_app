@@ -423,9 +423,12 @@ class _PredictorPageState extends State<PredictorPage> {
           style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
         ),
         const SizedBox(height: 8),
-        Row(
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
           children: [
-            Expanded(
+            SizedBox(
+              width: 140,
               child: OutlinedButton.icon(
                 onPressed: _isSubmittingFeedback
                     ? null
@@ -443,8 +446,8 @@ class _PredictorPageState extends State<PredictorPage> {
                 ),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
+            SizedBox(
+              width: 140,
               child: OutlinedButton.icon(
                 onPressed: _isSubmittingFeedback
                     ? null
