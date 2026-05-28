@@ -28,6 +28,9 @@ from typing import Any, Optional
 import joblib
 from foto2ap_service import recognize_ap
 import numpy as np
+import networkx as nx
+import osmnx as ox
+import geopandas as gpd
 import pandas as pd
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
@@ -67,6 +70,98 @@ _heatmap_cache: dict[str, dict] = {}
 _heatmap_cache_time: dict[str, float] = {}
 _trend_cache: dict[str, dict] = {}
 _trend_cache_time: dict[str, float] = {}
+
+# --- Routing graph (osmnx) ---
+_route_graph: Optional[nx.MultiDiGraph] = None
+_UAB_BBOX = (2.092, 41.492, 2.118, 41.514)  # (minx, miny, maxx, maxy)
+
+def _load_route_graph() -> nx.MultiDiGraph:
+    """Load or build the UAB campus road graph using osmnx."""
+    global _route_graph
+    if _route_graph is not None:
+        return _route_graph
+    print("[INFO] Loading UAB campus road graph from OSM...")
+    try:
+        G = ox.graph_from_bbox(
+            north=_UAB_BBOX[3], south=_UAB_BBOX[1],
+            east=_UAB_BBOX[2], west=_UAB_BBOX[0],
+            network_type="walk",
+            simplify=True,
+        )
+        # Add AP nodes to the graph
+        from helper_script import add_aps_to_graph
+        ap_nodes = add_aps_to_graph(G, path=str(GEOJSON_PATH))
+        print(f"[INFO] Added {len(ap_nodes)} AP nodes to route graph")
+        _route_graph = G
+    except Exception as e:
+        print(f"[ERROR] Failed to load route graph: {e}")
+        raise
+    return _route_graph
+
+def _find_route_path(lat: float, lng: float, dest_lat: float, dest_lng: float, acceptable_range: int = 500) -> dict:
+    """
+    Find a walking path on the UAB campus road graph from (lat,lng) to (dest_lat,dest_lng).
+    Uses Dijkstra shortest path on real roads.
+    """
+    G = _load_route_graph()
+    
+    # Find nearest graph nodes to start and destination
+    outdoors_nodes = [n for n, d in G.nodes(data=True) if d.get("node_type") is None]
+    start_node = ox.distance.nearest_nodes(G.subgraph(outdoors_nodes), lng, lat)
+    dest_node = ox.distance.nearest_nodes(G.subgraph(outdoors_nodes), dest_lng, dest_lat)
+    
+    # Find qualified destinations within acceptable_range of the destination
+    from helper_script import find_qualified_in_range, find_paths_to_candidates
+    qualified = find_qualified_in_range(G, dest_node, acceptable_range=acceptable_range, weight_attr="length")
+    
+    if not qualified:
+        # Fall back to direct path to destination node
+        qualified = [dest_node]
+    
+    # Find shortest paths from start to all qualified destinations
+    paths_dict = find_paths_to_candidates(G, start_node, qualified, weight_attr="length")
+    
+    # Pick the best path (shortest distance)
+    best_target = min(paths_dict, key=lambda k: paths_dict[k][0])
+    best_distance, best_path = paths_dict[best_target]
+    
+    if not best_path or best_distance == float('inf'):
+        # Fallback: direct path to destination
+        try:
+            best_distance, best_path = nx.single_source_dijkstra(G, start_node, dest_node, weight="length")
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            return {"path": [], "distance": 0, "waypoints": [], "total_waypoints": 0}
+    
+    # Convert path nodes to lat/lng coordinates
+    path_coords = []
+    for node in best_path:
+        if node in G:
+            path_coords.append({
+                "lat": round(G.nodes[node]["y"], 6),
+                "lng": round(G.nodes[node]["x"], 6),
+            })
+    
+    # Find APs near the path
+    ap_index = _build_ap_index()
+    path_aps = []
+    for ap in ap_index:
+        dist_to_start = _approximate_distance(lat, lng, ap["lat"], ap["lng"])
+        dist_to_dest = _approximate_distance(dest_lat, dest_lng, ap["lat"], ap["lng"])
+        if dist_to_start <= acceptable_range or dist_to_dest <= acceptable_range:
+            path_aps.append({
+                "lat": ap["lat"], "lng": ap["lng"],
+                "building": ap["building"], "floor": int(ap["floor"]),
+                "ap_name": ap["name"],
+                "distance_to_start": round(dist_to_start, 1),
+                "distance_to_dest": round(dist_to_dest, 1),
+            })
+    
+    return {
+        "path": path_coords,
+        "distance": round(best_distance, 1),
+        "waypoints": path_aps,
+        "total_waypoints": len(path_aps),
+    }
 
 # --- Booking system (in-memory storage) ---
 _bookings: list[dict] = []
@@ -1149,33 +1244,19 @@ async def recommend_aps(request: RecommendRequest):
 @app.get("/route/{lat}/{lng}/{dest_lat}/{dest_lng}")
 async def get_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acceptable_range: int = Query(default=500, ge=100, le=5000, alias="acceptable_range")):
     try:
-        _load_geojson()
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    ap_index = _build_ap_index()
-    path_aps = []
-    for ap in ap_index:
-        dist_to_start = _approximate_distance(lat, lng, ap["lat"], ap["lng"])
-        dist_to_dest = _approximate_distance(dest_lat, dest_lng, ap["lat"], ap["lng"])
-        if dist_to_start <= acceptable_range or dist_to_dest <= acceptable_range:
-            path_aps.append({"lat": ap["lat"], "lng": ap["lng"], "building": ap["building"], "floor": int(ap["floor"]), "ap_name": ap["name"], "distance_to_start": round(dist_to_start, 1), "distance_to_dest": round(dist_to_dest, 1)})
-    return {"path": [{"lat": round(lat, 6), "lng": round(lng, 6)}] + [{"lat": round(ap["lat"], 6), "lng": round(ap["lng"], 6)} for ap in path_aps] + [{"lat": round(dest_lat, 6), "lng": round(dest_lng, 6)}], "waypoints": path_aps, "total_waypoints": len(path_aps)}
+        result = _find_route_path(lat, lng, dest_lat, dest_lng, acceptable_range)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Route computation failed: {str(e)}")
 
 
 @app.get("/route/advanced/{lat}/{lng}/{dest_lat}/{dest_lng}")
 async def get_advanced_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acceptable_range: int = Query(default=500, ge=100, le=5000, alias="acceptable_range")):
     try:
-        _load_geojson()
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    ap_index = _build_ap_index()
-    path_aps = []
-    for ap in ap_index:
-        dist_to_start = _approximate_distance(lat, lng, ap["lat"], ap["lng"])
-        dist_to_dest = _approximate_distance(dest_lat, dest_lng, ap["lat"], ap["lng"])
-        if dist_to_start <= acceptable_range or dist_to_dest <= acceptable_range:
-            path_aps.append({"lat": ap["lat"], "lng": ap["lng"], "building": ap["building"], "floor": int(ap["floor"]), "ap_name": ap["name"], "distance_to_start": round(dist_to_start, 1), "distance_to_dest": round(dist_to_dest, 1)})
-    return {"path": [{"lat": round(lat, 6), "lng": round(lng, 6)}] + [{"lat": round(ap["lat"], 6), "lng": round(ap["lng"], 6)} for ap in path_aps] + [{"lat": round(dest_lat, 6), "lng": round(dest_lng, 6)}], "waypoints": path_aps, "total_waypoints": len(path_aps)}
+        result = _find_route_path(lat, lng, dest_lat, dest_lng, acceptable_range)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Route computation failed: {str(e)}")
 
 
 @app.post("/foto2ap/recognize")
