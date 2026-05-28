@@ -22,6 +22,9 @@ class _PredictorPageState extends State<PredictorPage> {
   Map<String, dynamic>? _predictionResult;
   bool _isLoading = false;
   bool _showManualForm = false;
+  bool _feedbackSubmitted = false;
+  bool _isSubmittingFeedback = false;
+
 
   @override
   void initState() {
@@ -371,11 +374,17 @@ class _PredictorPageState extends State<PredictorPage> {
                                   style: const TextStyle(fontSize: 11),
                                 ),
                               ],
+                              const SizedBox(height: 16),
+                              const Divider(height: 1),
+                              const SizedBox(height: 12),
+                              // Feedback section
+                              _buildFeedbackSection(),
                             ],
                           ),
                   ),
                 ),
               ],
+
             ],
           ),
         ),
@@ -383,7 +392,107 @@ class _PredictorPageState extends State<PredictorPage> {
     );
   }
 
+  Widget _buildFeedbackSection() {
+    if (_feedbackSubmitted) {
+      return Row(
+        children: [
+          const Icon(Icons.check_circle, color: Colors.green, size: 16),
+          const SizedBox(width: 8),
+          const Text(
+            'Feedback submitted! Thank you.',
+            style: TextStyle(color: Colors.green, fontSize: 12),
+          ),
+          const Spacer(),
+          TextButton(
+            onPressed: () => setState(() => _feedbackSubmitted = false),
+            child: const Text('Submit again', style: TextStyle(fontSize: 11)),
+          ),
+        ],
+      );
+    }
+
+    final prediction = _predictionResult?['prediction'] as String? ?? 'Up';
+    final apName = _predictionResult?['ap_info']?['name'] as String? ?? _apNameController.text.trim();
+    final hour = double.tryParse(_hourController.text)?.toInt() ?? DateTime.now().hour;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Was this prediction correct?',
+          style: TextStyle(fontWeight: FontWeight.w500, fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _isSubmittingFeedback
+                    ? null
+                    : () => _submitFeedback(apName, hour, prediction, 'Up'),
+                icon: _isSubmittingFeedback
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.thumb_up, size: 16),
+                label: const Text('Yes, Up', style: TextStyle(fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.green,
+                  side: const BorderSide(color: Colors.green),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: _isSubmittingFeedback
+                    ? null
+                    : () => _submitFeedback(apName, hour, prediction, 'Down'),
+                icon: _isSubmittingFeedback
+                    ? const SizedBox(
+                        width: 14, height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.thumb_down, size: 16),
+                label: const Text('No, Down', style: TextStyle(fontSize: 12)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.red,
+                  side: const BorderSide(color: Colors.red),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Future<void> _submitFeedback(String apName, int hour, String predicted, String actual) async {
+    setState(() => _isSubmittingFeedback = true);
+    try {
+      await _apiService.submitPredictionFeedback(
+        apName: apName,
+        hour: hour,
+        predicted: predicted,
+        actual: actual,
+      );
+      setState(() {
+        _feedbackSubmitted = true;
+        _isSubmittingFeedback = false;
+      });
+    } catch (e) {
+      setState(() => _isSubmittingFeedback = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to submit feedback: $e')),
+        );
+      }
+    }
+  }
+
   Widget _featureRow(String label, String value) {
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2),
       child: Row(

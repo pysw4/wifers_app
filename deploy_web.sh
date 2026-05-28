@@ -14,7 +14,7 @@ cd build/web
 
 # Initialize a new git repo for the build output
 git init
-git checkout -b gh-pages
+git checkout -b gh-pages 2>/dev/null || git checkout gh-pages
 git add .
 git commit -m "Deploy Flutter Web - $(date '+%Y-%m-%d %H:%M')"
 

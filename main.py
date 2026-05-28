@@ -20,6 +20,8 @@ import json
 import math
 import os
 import time
+import uuid
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
@@ -32,6 +34,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
+
 
 BASE_DIR = Path(__file__).resolve().parent
 MODELS_DIR = BASE_DIR / "models"
@@ -62,6 +65,17 @@ _heatmap_cache: dict[str, dict] = {}
 _heatmap_cache_time: dict[str, float] = {}
 _trend_cache: dict[str, dict] = {}
 _trend_cache_time: dict[str, float] = {}
+
+# --- Booking system (in-memory storage) ---
+_bookings: list[dict] = []
+_room_lookup: dict[str, dict] = {}
+PERF_RANK = {'Critical': 0, 'Poor': 1, 'Fair': 2, 'Good': 3,
+             'Excellent': 4, 'Excellent+': 5, 'Excellent++': 6}
+
+# --- Prediction feedback / accuracy tracking ---
+_prediction_feedback: list[dict] = []  # Stores {ap_name, hour, predicted, actual, timestamp}
+
+
 
 
 def _load_decision_tree_v3():
@@ -215,6 +229,23 @@ def _dbm_to_quality(dbm: float) -> dict:
         return {"quality": "Very Poor", "bars": 1}
 
 
+def _dbm_to_status(dbm: float) -> str:
+    """Convert signal dBm to predicted Up/Down status.
+    Signal >= -75 dBm → likely Up (usable connection)
+    Signal < -75 dBm → likely Down (too weak for reliable use)
+    """
+    return "Up" if dbm >= -75 else "Down"
+
+
+def _dbm_to_status_confidence(dbm: float) -> float:
+    """Confidence of the status prediction based on how far from threshold."""
+    # -75 dBm threshold, confidence scales with distance from threshold
+    diff = dbm - (-75)
+    # Clamp confidence between 0.5 and 0.99
+    confidence = min(0.99, max(0.5, 0.5 + abs(diff) / 50))
+    return round(confidence, 3)
+
+
 def _haversine_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     R = 6371000
     dlat = math.radians(lat2 - lat1)
@@ -255,7 +286,155 @@ def _predict_signal_for_ap(ap_entry: dict, hour: float, day_of_week: float, is_w
     return float(model.predict(df)[0])
 
 
+# --- Booking helper functions ---
+
+def _build_room_lookup():
+    """Build a lookup dict mapping room codes to AP info from GeoJSON."""
+    global _room_lookup
+    if _room_lookup:
+        return _room_lookup
+    geojson = _load_geojson()
+    for feature in geojson["features"]:
+        props = feature["properties"]
+        room_code = str(props.get("USER_Espai", "")).strip().upper()
+        if room_code:
+            _room_lookup[room_code] = {
+                "ap_name": str(props.get("USER_NOM_A", "")).strip().upper(),
+                "building": props.get("USER_EDIFI", ""),
+                "floor": props.get("Num_Planta", 0),
+            }
+    return _room_lookup
+
+
+def _get_ap_from_room(room_code: str) -> Optional[dict]:
+    lookup = _build_room_lookup()
+    return lookup.get(room_code.strip().upper())
+
+
+def _check_booking_availability(bookings: list, room_code: str, date_str: str, start_hour: int, end_hour: int) -> tuple[bool, Optional[dict]]:
+    ap_info = _get_ap_from_room(room_code)
+    if ap_info is None:
+        return False, None
+    ap_name = ap_info["ap_name"]
+    for book in bookings:
+        if book["ap_name"] != ap_name or book["date"] != date_str:
+            continue
+        if not (end_hour <= book["start_hour"] or start_hour >= book["end_hour"]):
+            return False, book
+    return True, None
+
+
+def _predict_booking_performance(room_code: str, date_str: str, start_hour: int, end_hour: int, n_students: int) -> dict:
+    """Predict performance for a booking slot. Returns dict with performance/warning."""
+    booking_dt = datetime.strptime(f"{date_str} {start_hour:02d}:00", "%Y-%m-%d %H:%M")
+    hours_until = (booking_dt - datetime.now()).total_seconds() / 3600
+
+    ap_info = _get_ap_from_room(room_code)
+    if ap_info is None:
+        return {"ap_name": "Unknown", "performance": None, "warning": "Room not found"}
+
+    ap_name = ap_info["ap_name"]
+    ap_entry = _find_ap_in_index(ap_name)
+
+    if hours_until > 5:
+        return {
+            "ap_name": ap_name,
+            "performance": None,
+            "warning": f"Prediction not available — booking is {hours_until:.0f}h away (max 5h)"
+        }
+
+    if ap_entry is None:
+        return {"ap_name": ap_name, "performance": None, "warning": "AP not found in database"}
+
+    try:
+        signal_model = _load_signal_strength_model()
+    except FileNotFoundError:
+        return {"ap_name": ap_name, "performance": None, "warning": "Signal model not loaded"}
+
+    booking_date = datetime.strptime(date_str, "%Y-%m-%d")
+    day_of_week = float(booking_date.weekday())
+    is_weekend = 1.0 if day_of_week >= 5 else 0.0
+    day_of_month = float(booking_date.day)
+    month = float(booking_date.month)
+
+    building_code = _encode_building(ap_entry["building"])
+    hours = list(range(start_hour, end_hour))
+
+    predictions = []
+    for h in hours:
+        features = _build_signal_features(
+            building_code=building_code, floor=ap_entry["floor"],
+            hour=float(h), day_of_week=day_of_week,
+            is_weekend=is_weekend, day_of_month=day_of_month, month=month
+        )
+        df = pd.DataFrame([features])
+        signal_db = float(signal_model.predict(df)[0])
+        quality = _dbm_to_quality(signal_db)["quality"]
+        predictions.append((h, quality))
+
+    if not predictions:
+        return {"ap_name": ap_name, "performance": None, "warning": "No predictions available"}
+
+    worst = min(predictions, key=lambda x: PERF_RANK.get(x[1], 0))
+    return {
+        "ap_name": ap_name,
+        "performance": worst[1],
+        "predictions": predictions,
+        "warning": None
+    }
+
+
+def _suggest_best_slot(room_code: str, date_str: str, duration_hours: int, n_students: int) -> Optional[dict]:
+    """Find the best available time slot for a given room and duration."""
+    results = []
+    for start in range(7, 23 - duration_hours):
+        end = start + duration_hours
+        available, _ = _check_booking_availability(_bookings, room_code, date_str, start, end)
+        if not available:
+            continue
+        pred = _predict_booking_performance(room_code, date_str, start, end, n_students)
+        if pred is None or pred["warning"]:
+            continue
+        results.append((start, end, pred["performance"]))
+
+    if not results:
+        return None
+    best = max(results, key=lambda x: PERF_RANK.get(x[2], 0))
+    return {"start_hour": best[0], "end_hour": best[1], "performance": best[2]}
+
+
+def _suggest_alternative_rooms(room_code: str, date_str: str, start_hour: int, end_hour: int, n_students: int, min_perf: str) -> list[dict]:
+    """Find alternative rooms on the same building/floor with better performance."""
+    current = _get_ap_from_room(room_code)
+    if current is None:
+        return []
+
+    lookup = _build_room_lookup()
+    candidates = []
+    visited_aps = set()
+
+    for code, info in lookup.items():
+        if (info["building"] == current["building"]
+                and info["floor"] == current["floor"]
+                and code != room_code.strip().upper()):
+            ap_name = info["ap_name"]
+            if ap_name in visited_aps:
+                continue
+            available, _ = _check_booking_availability(_bookings, code, date_str, start_hour, end_hour)
+            if not available:
+                continue
+            pred = _predict_booking_performance(code, date_str, start_hour, end_hour, n_students)
+            if pred is None or pred["warning"]:
+                continue
+            if pred["performance"] and PERF_RANK.get(pred["performance"], 0) >= PERF_RANK.get(min_perf, 0):
+                candidates.append({"room_code": code, "performance": pred["performance"]})
+                visited_aps.add(ap_name)
+
+    return sorted(candidates, key=lambda x: PERF_RANK.get(x["performance"], 0), reverse=True)
+
+
 class PredictRequestV3(BaseModel):
+
     model_config = {"extra": "ignore"}
     ap_name: str = Field(default="", description="AP name (e.g. AP-FTI02)")
     hour: float = Field(default=12, description="Hour of day (0-23)")
@@ -423,20 +602,136 @@ async def get_ap_daily_trend(ap_name: str):
     hourly_data = []
     for hour, signal_db in enumerate(predictions):
         quality_info = _dbm_to_quality(float(signal_db))
-        hourly_data.append({"hour": hour, "signal_db": round(float(signal_db), 1), "signal_quality": quality_info["quality"], "bars": quality_info["bars"]})
+        status = _dbm_to_status(float(signal_db))
+        status_conf = _dbm_to_status_confidence(float(signal_db))
+        hourly_data.append({
+            "hour": hour,
+            "signal_db": round(float(signal_db), 1),
+            "signal_quality": quality_info["quality"],
+            "bars": quality_info["bars"],
+            "predicted_status": status,
+            "status_confidence": status_conf,
+        })
     signal_values = [h["signal_db"] for h in hourly_data]
     avg_db = sum(signal_values) / len(signal_values) if signal_values else 0
     max_db = max(signal_values) if signal_values else 0
     min_db = min(signal_values) if signal_values else 0
     best_hour = signal_values.index(max_db) if signal_values else 0
     worst_hour = signal_values.index(min_db) if signal_values else 0
-    result = {"ap_name": ap_name, "building": building, "floor": int(floor), "lat": ap_entry["lat"], "lng": ap_entry["lng"], "trend": hourly_data, "day_type": "weekday", "stats": {"avg_db": round(avg_db, 1), "max_db": round(max_db, 1), "min_db": round(min_db, 1), "best_hour": best_hour, "worst_hour": worst_hour}}
+
+    # Calculate accuracy from feedback data if available
+    ap_feedback = [f for f in _prediction_feedback if f["ap_name"].strip().lower() == cache_key]
+    accuracy_stats = {}
+    if ap_feedback:
+        correct = sum(1 for f in ap_feedback if f["predicted"] == f["actual"])
+        total = len(ap_feedback)
+        accuracy_stats = {
+            "total_feedback": total,
+            "correct": correct,
+            "accuracy": round(correct / total, 3) if total > 0 else 0,
+            "up_accuracy": 0,
+            "down_accuracy": 0,
+        }
+        up_feedback = [f for f in ap_feedback if f["actual"] == "Up"]
+        down_feedback = [f for f in ap_feedback if f["actual"] == "Down"]
+        if up_feedback:
+            accuracy_stats["up_accuracy"] = round(
+                sum(1 for f in up_feedback if f["predicted"] == "Up") / len(up_feedback), 3
+            )
+        if down_feedback:
+            accuracy_stats["down_accuracy"] = round(
+                sum(1 for f in down_feedback if f["predicted"] == "Down") / len(down_feedback), 3
+            )
+
+    result = {
+        "ap_name": ap_name,
+        "building": building,
+        "floor": int(floor),
+        "lat": ap_entry["lat"],
+        "lng": ap_entry["lng"],
+        "trend": hourly_data,
+        "day_type": "weekday",
+        "stats": {
+            "avg_db": round(avg_db, 1),
+            "max_db": round(max_db, 1),
+            "min_db": round(min_db, 1),
+            "best_hour": best_hour,
+            "worst_hour": worst_hour,
+        },
+        "accuracy": accuracy_stats,
+    }
     _trend_cache[cache_key] = result
     _trend_cache_time[cache_key] = now
     return result
 
 
+
+class PredictFeedbackRequest(BaseModel):
+    ap_name: str = Field(..., description="AP name")
+    hour: int = Field(..., ge=0, le=23, description="Hour of prediction")
+    predicted: str = Field(..., pattern="^(Up|Down)$", description="What the model predicted")
+    actual: str = Field(..., pattern="^(Up|Down)$", description="What actually happened")
+
+
+@app.post("/predict/feedback")
+async def submit_prediction_feedback(request: PredictFeedbackRequest):
+    """Submit user feedback on prediction accuracy."""
+    feedback = {
+        "ap_name": request.ap_name.strip(),
+        "hour": request.hour,
+        "predicted": request.predicted,
+        "actual": request.actual,
+        "timestamp": time.time(),
+    }
+    _prediction_feedback.append(feedback)
+    # Keep only last 1000 entries per AP to manage memory
+    ap_key = request.ap_name.strip().lower()
+    ap_entries = [f for f in _prediction_feedback if f["ap_name"].strip().lower() == ap_key]
+    if len(ap_entries) > 1000:
+        excess = len(ap_entries) - 1000
+        _prediction_feedback[:] = [
+            f for f in _prediction_feedback
+            if f["ap_name"].strip().lower() != ap_key or f not in ap_entries[:excess]
+        ]
+    return {
+        "success": True,
+        "feedback": feedback,
+    }
+
+
+@app.get("/predict/stats/{ap_name:path}")
+async def get_prediction_stats(ap_name: str):
+    """Get prediction accuracy statistics for a specific AP."""
+    cache_key = ap_name.strip().lower()
+    ap_feedback = [f for f in _prediction_feedback if f["ap_name"].strip().lower() == cache_key]
+    if not ap_feedback:
+        return {
+            "ap_name": ap_name,
+            "total_feedback": 0,
+            "accuracy": None,
+            "message": "No feedback data available for this AP yet."
+        }
+    correct = sum(1 for f in ap_feedback if f["predicted"] == f["actual"])
+    total = len(ap_feedback)
+    up_feedback = [f for f in ap_feedback if f["actual"] == "Up"]
+    down_feedback = [f for f in ap_feedback if f["actual"] == "Down"]
+    up_correct = sum(1 for f in up_feedback if f["predicted"] == "Up")
+    down_correct = sum(1 for f in down_feedback if f["predicted"] == "Down")
+    return {
+        "ap_name": ap_name,
+        "total_feedback": total,
+        "correct": correct,
+        "accuracy": round(correct / total, 3),
+        "up_accuracy": round(up_correct / len(up_feedback), 3) if up_feedback else None,
+        "down_accuracy": round(down_correct / len(down_feedback), 3) if down_feedback else None,
+        "up_samples": len(up_feedback),
+        "down_samples": len(down_feedback),
+        "recent_feedback": sorted(ap_feedback, key=lambda x: x["timestamp"], reverse=True)[:10],
+    }
+
+
 @app.get("/predict/signal_strength/ap_trend/{ap_name:path}/compare")
+
 async def get_ap_trend_compare(ap_name: str):
     try:
         model = _load_signal_strength_model()
@@ -593,7 +888,262 @@ async def foto2ap_recognize(file: UploadFile = File(...)):
     return {"success": True, **result}
 
 
+# --- Booking API endpoints ---
+
+
+class BookingCreateRequest(BaseModel):
+    teacher_id: str = Field(min_length=1, max_length=100)
+    room_code: str = Field(min_length=1, max_length=50)
+    date: str = Field(description="Date in YYYY-MM-DD format")
+    start_hour: int = Field(ge=7, le=22)
+    end_hour: int = Field(ge=8, le=23)
+    n_students: int = Field(ge=1, le=200)
+    min_performance: str = Field(default="Fair", pattern="^(Fair|Good|Excellent)$")
+
+
+class BookingCancelRequest(BaseModel):
+    booking_id: str = Field(min_length=1)
+
+
+class BookingPredictRequest(BaseModel):
+    room_code: str = Field(min_length=1, max_length=50)
+    date: str = Field(description="Date in YYYY-MM-DD format")
+    start_hour: int = Field(ge=7, le=22)
+    end_hour: int = Field(ge=8, le=23)
+    n_students: int = Field(ge=1, le=200)
+
+
+class BookingSuggestSlotRequest(BaseModel):
+    room_code: str = Field(min_length=1, max_length=50)
+    date: str = Field(description="Date in YYYY-MM-DD format")
+    duration_hours: int = Field(ge=1, le=6)
+    n_students: int = Field(ge=1, le=200)
+
+
+class BookingAlternativesRequest(BaseModel):
+    room_code: str = Field(min_length=1, max_length=50)
+    date: str = Field(description="Date in YYYY-MM-DD format")
+    start_hour: int = Field(ge=7, le=22)
+    end_hour: int = Field(ge=8, le=23)
+    n_students: int = Field(ge=1, le=200)
+    min_performance: str = Field(default="Fair", pattern="^(Fair|Good|Excellent)$")
+
+
+@app.post("/booking/create")
+async def booking_create(request: BookingCreateRequest):
+    """Create a new booking after checking availability and predicting performance."""
+    if request.end_hour <= request.start_hour:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    ap_info = _get_ap_from_room(request.room_code)
+    if ap_info is None:
+        raise HTTPException(status_code=404, detail=f"Room '{request.room_code}' not found")
+
+    available, conflict = _check_booking_availability(
+        _bookings, request.room_code, request.date,
+        request.start_hour, request.end_hour
+    )
+    if not available:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Room already booked for this time slot",
+                "conflict": {
+                    "start_hour": conflict["start_hour"],
+                    "end_hour": conflict["end_hour"],
+                    "booking_id": conflict["booking_id"],
+                }
+            }
+        )
+
+    pred = _predict_booking_performance(
+        request.room_code, request.date,
+        request.start_hour, request.end_hour, request.n_students
+    )
+
+    booking = {
+        "booking_id": str(uuid.uuid4())[:8].upper(),
+        "teacher_id": request.teacher_id,
+        "room_code": request.room_code.strip().upper(),
+        "ap_name": ap_info["ap_name"],
+        "date": request.date,
+        "start_hour": request.start_hour,
+        "end_hour": request.end_hour,
+        "n_students": request.n_students,
+        "min_performance": request.min_performance,
+        "predicted_performance": pred.get("performance"),
+        "warning": pred.get("warning"),
+    }
+
+    _bookings.append(booking)
+
+    return {
+        "success": True,
+        "booking": booking,
+        "prediction": {
+            "performance": pred.get("performance"),
+            "warning": pred.get("warning"),
+        }
+    }
+
+
+@app.post("/booking/predict")
+async def booking_predict(request: BookingPredictRequest):
+    """Predict performance for a room/time slot without creating a booking."""
+    if request.end_hour <= request.start_hour:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    ap_info = _get_ap_from_room(request.room_code)
+    if ap_info is None:
+        raise HTTPException(status_code=404, detail=f"Room '{request.room_code}' not found")
+
+    available, conflict = _check_booking_availability(
+        _bookings, request.room_code, request.date,
+        request.start_hour, request.end_hour
+    )
+
+    pred = _predict_booking_performance(
+        request.room_code, request.date,
+        request.start_hour, request.end_hour, request.n_students
+    )
+
+    return {
+        "room_code": request.room_code.strip().upper(),
+        "ap_name": ap_info["ap_name"],
+        "date": request.date,
+        "start_hour": request.start_hour,
+        "end_hour": request.end_hour,
+        "n_students": request.n_students,
+        "available": available,
+        "conflict": {
+            "start_hour": conflict["start_hour"] if conflict else None,
+            "end_hour": conflict["end_hour"] if conflict else None,
+            "booking_id": conflict["booking_id"] if conflict else None,
+        } if conflict else None,
+        "prediction": {
+            "performance": pred.get("performance"),
+            "warning": pred.get("warning"),
+        }
+    }
+
+
+@app.post("/booking/cancel")
+async def booking_cancel(request: BookingCancelRequest):
+    """Cancel an existing booking by its ID."""
+    for i, book in enumerate(_bookings):
+        if book["booking_id"] == request.booking_id:
+            _bookings.pop(i)
+            return {"success": True, "message": "Booking cancelled", "booking_id": request.booking_id}
+    raise HTTPException(status_code=404, detail=f"Booking '{request.booking_id}' not found")
+
+
+@app.get("/booking/list")
+async def booking_list(teacher_id: Optional[str] = Query(default=None, description="Filter by teacher ID"),
+                       room_code: Optional[str] = Query(default=None, description="Filter by room code"),
+                       date: Optional[str] = Query(default=None, description="Filter by date (YYYY-MM-DD)")):
+    """List bookings with optional filters."""
+    results = _bookings
+    if teacher_id:
+        results = [b for b in results if b["teacher_id"] == teacher_id]
+    if room_code:
+        results = [b for b in results if b["room_code"] == room_code.strip().upper()]
+    if date:
+        results = [b for b in results if b["date"] == date]
+    return {"bookings": results, "total": len(results)}
+
+
+@app.post("/booking/suggest-slot")
+async def booking_suggest_slot(request: BookingSuggestSlotRequest):
+    """Suggest the best available time slot for a room and duration."""
+    ap_info = _get_ap_from_room(request.room_code)
+    if ap_info is None:
+        raise HTTPException(status_code=404, detail=f"Room '{request.room_code}' not found")
+
+    best = _suggest_best_slot(
+        request.room_code, request.date,
+        request.duration_hours, request.n_students
+    )
+
+    if best is None:
+        return {
+            "found": False,
+            "message": "No available slots with prediction for this room and date"
+        }
+
+    return {"found": True, "slot": best}
+
+
+@app.post("/booking/alternatives")
+async def booking_alternatives(request: BookingAlternativesRequest):
+    """Find alternative rooms on the same floor with better performance."""
+    if request.end_hour <= request.start_hour:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    ap_info = _get_ap_from_room(request.room_code)
+    if ap_info is None:
+        raise HTTPException(status_code=404, detail=f"Room '{request.room_code}' not found")
+
+    alternatives = _suggest_alternative_rooms(
+        request.room_code, request.date,
+        request.start_hour, request.end_hour,
+        request.n_students, request.min_performance
+    )
+
+    return {
+        "room_code": request.room_code.strip().upper(),
+        "alternatives": alternatives,
+        "total": len(alternatives)
+    }
+
+
+@app.get("/booking/room-info/{room_code}")
+async def booking_room_info(room_code: str):
+    """Get AP info for a room code."""
+    ap_info = _get_ap_from_room(room_code)
+    if ap_info is None:
+        raise HTTPException(status_code=404, detail=f"Room '{room_code}' not found")
+    return {
+        "room_code": room_code.strip().upper(),
+        "ap_name": ap_info["ap_name"],
+        "building": ap_info["building"],
+        "floor": ap_info["floor"],
+    }
+
+
+@app.get("/booking/availability/{room_code}/{date}")
+async def booking_availability(room_code: str, date: str):
+    """Get hourly availability for a room on a given date."""
+    ap_info = _get_ap_from_room(room_code)
+    if ap_info is None:
+        raise HTTPException(status_code=404, detail=f"Room '{room_code}' not found")
+
+    ap_name = ap_info["ap_name"]
+    booked_ranges = [
+        (b["start_hour"], b["end_hour"])
+        for b in _bookings
+        if b["ap_name"] == ap_name and b["date"] == date
+    ]
+
+    def is_booked(h):
+        return any(s <= h < e for s, e in booked_ranges)
+
+    hours = []
+    for h in range(7, 22):
+        hours.append({
+            "hour": h,
+            "available": not is_booked(h),
+        })
+
+    return {
+        "room_code": room_code.strip().upper(),
+        "ap_name": ap_name,
+        "date": date,
+        "hours": hours,
+    }
+
+
 @app.get("/cache/status")
+
 async def cache_status():
     return {"heatmap_cache": {"entries": len(_heatmap_cache), "keys": list(_heatmap_cache.keys()), "ttl_seconds": HEATMAP_CACHE_TTL}, "trend_cache": {"entries": len(_trend_cache), "keys": list(_trend_cache.keys()), "ttl_seconds": TREND_CACHE_TTL}, "models_loaded": {"decision_tree_v3": _decision_tree_v3 is not None, "building_encoder": _building_encoder is not None, "signal_strength_model": _signal_strength_model is not None}, "ap_index_size": len(_ap_index) if _ap_index else 0, "buildings_count": len(_buildings_list) if _buildings_list else 0}
 

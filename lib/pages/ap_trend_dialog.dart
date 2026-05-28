@@ -25,7 +25,9 @@ class _APTrendDialogState extends State<APTrendDialog> {
   String _dayType = 'weekday';
   String _dayLabel = 'Weekday';
   Map<String, dynamic> _stats = {};
+  Map<String, dynamic> _accuracy = {};
   bool _showBars = true; // Toggle line chart / bar chart
+
 
   /// Map backend day names ('mon'/'tue'/.../'sun') to display labels
   static const Map<String, String> _dayLabels = {
@@ -65,8 +67,10 @@ class _APTrendDialogState extends State<APTrendDialog> {
         _dayType = rawDayType;
         _dayLabel = _formatDayType(rawDayType);
         _stats = data['stats'] as Map<String, dynamic>? ?? {};
+        _accuracy = data['accuracy'] as Map<String, dynamic>? ?? {};
         _isLoading = false;
       });
+
 
     } catch (e) {
       setState(() {
@@ -164,7 +168,14 @@ class _APTrendDialogState extends State<APTrendDialog> {
               _buildStatsRow(),
             ],
 
+            // Accuracy row (from user feedback)
+            if (_accuracy.isNotEmpty && _accuracy['total_feedback'] != null && _accuracy['total_feedback'] > 0) ...[
+              const SizedBox(height: 6),
+              _buildAccuracyRow(),
+            ],
+
             const Divider(height: 16),
+
 
             // Chart area
             Expanded(
@@ -256,7 +267,77 @@ class _APTrendDialogState extends State<APTrendDialog> {
     );
   }
 
+  Widget _buildAccuracyRow() {
+    final total = _accuracy['total_feedback'] as int? ?? 0;
+    final accuracy = _accuracy['accuracy'] as num?;
+    final upAccuracy = _accuracy['up_accuracy'] as num?;
+    final downAccuracy = _accuracy['down_accuracy'] as num?;
+    final correct = _accuracy['correct'] as int? ?? 0;
+
+    Color accuracyColor;
+    if (accuracy == null) {
+      accuracyColor = Colors.grey;
+    } else if (accuracy >= 0.8) {
+      accuracyColor = Colors.green;
+    } else if (accuracy >= 0.6) {
+      accuracyColor = Colors.orange;
+    } else {
+      accuracyColor = Colors.red;
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: accuracyColor.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: accuracyColor.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.check_circle_outline, size: 14, color: accuracyColor),
+          const SizedBox(width: 6),
+          Text(
+            'Accuracy: ${accuracy != null ? "${(accuracy * 100).toStringAsFixed(1)}%" : "N/A"}',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              color: accuracyColor,
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (upAccuracy != null)
+            _buildMiniStat('Up', upAccuracy, Colors.green),
+          if (downAccuracy != null)
+            _buildMiniStat('Down', downAccuracy, Colors.red),
+          const Spacer(),
+          Text(
+            '$correct/$total',
+            style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMiniStat(String label, num accuracy, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.1),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Text(
+          '$label: ${(accuracy * 100).toStringAsFixed(0)}%',
+          style: TextStyle(fontSize: 9, color: color, fontWeight: FontWeight.w500),
+        ),
+      ),
+    );
+  }
+
   Widget _buildStatItem(IconData icon, String label, String value, Color color) {
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -384,14 +465,16 @@ class _APTrendDialogState extends State<APTrendDialog> {
                   (d) => (d['hour'] as num).toInt() == group.x,
                 );
                 final db = (data['signal_db'] as num).toDouble();
+                final status = data['predicted_status'] as String? ?? _dbmToQuality(db);
                 return BarTooltipItem(
-                  '${group.x}:00\nBars: ${rod.toY.toInt()}\n${db.toStringAsFixed(1)} dBm',
+                  '${group.x}:00\n${db.toStringAsFixed(1)} dBm\nStatus: $status',
                   TextStyle(
                     color: _dbmToColor(db),
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
                   ),
                 );
+
               },
             ),
           ),
@@ -484,14 +567,22 @@ class _APTrendDialogState extends State<APTrendDialog> {
               return touchedSpots.map((spot) {
                 final db = spot.y;
                 final quality = _dbmToQuality(db);
+                // Find the matching data point to get predicted_status
+                final matchingData = validData.where(
+                  (d) => (d['hour'] as num).toInt() == spot.x.toInt(),
+                );
+                final status = matchingData.isNotEmpty
+                    ? (matchingData.first['predicted_status'] as String? ?? quality)
+                    : quality;
                 return LineTooltipItem(
-                  '${spot.x.toInt()}:00\n${db.toStringAsFixed(1)} dBm\n$quality',
+                  '${spot.x.toInt()}:00\n${db.toStringAsFixed(1)} dBm\nStatus: $status',
                   TextStyle(
                     color: _dbmToColor(db),
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
                   ),
                 );
+
               }).toList();
             },
           ),

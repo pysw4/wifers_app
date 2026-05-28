@@ -3,6 +3,8 @@ import 'package:wifers_app/pages/map_page.dart';
 import 'package:wifers_app/pages/recommend_page.dart';
 import 'package:wifers_app/pages/setting_page.dart';
 import 'package:wifers_app/pages/favorites_page.dart';
+import 'package:wifers_app/pages/booking_page.dart';
+
 
 class MyHomePage extends StatefulWidget {
   const MyHomePage({super.key, required this.title});
@@ -35,6 +37,16 @@ class _MyHomePageState extends State<MyHomePage> {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: Text(_titles[currentIndex]),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.book_online),
+            tooltip: 'Room Booking',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const BookingPage()),
+              );
+            },
+          ),
           if (currentIndex == 0)
             IconButton(
               icon: const Icon(Icons.favorite),
@@ -47,6 +59,7 @@ class _MyHomePageState extends State<MyHomePage> {
               },
             ),
         ],
+
       ),
       body: IndexedStack(
         index: currentIndex,

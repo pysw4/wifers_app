@@ -71,6 +71,25 @@ class ApiService {
   Future<Map<String, dynamic>> getAPDailyTrend(String apName) async =>
       await _get('predict/signal_strength/ap_trend/$apName') as Map<String, dynamic>;
 
+  /// Submit user feedback on prediction accuracy
+  Future<Map<String, dynamic>> submitPredictionFeedback({
+    required String apName,
+    required int hour,
+    required String predicted,
+    required String actual,
+  }) async =>
+      await _post('predict/feedback', {
+        'ap_name': apName,
+        'hour': hour,
+        'predicted': predicted,
+        'actual': actual,
+      }) as Map<String, dynamic>;
+
+  /// Get prediction accuracy statistics for a specific AP
+  Future<Map<String, dynamic>> getPredictionStats(String apName) async =>
+      await _get('predict/stats/$apName') as Map<String, dynamic>;
+
+
   Future<Map<String, dynamic>> recommendAPs({
     required double lat,
     required double lng,
@@ -83,4 +102,103 @@ class ApiService {
         'lat': lat, 'lng': lng, 'radius': radius,
         'mode': mode, 'building': building, 'prefer_stable': preferStable,
       }) as Map<String, dynamic>;
+
+  // --- Booking API methods ---
+
+  /// Get room info (AP name, building, floor) for a room code
+  Future<Map<String, dynamic>> getRoomInfo(String roomCode) async =>
+      await _get('booking/room-info/$roomCode') as Map<String, dynamic>;
+
+  /// Get hourly availability for a room on a given date
+  Future<Map<String, dynamic>> getBookingAvailability(String roomCode, String date) async =>
+      await _get('booking/availability/$roomCode/$date') as Map<String, dynamic>;
+
+  /// Predict performance for a room/time slot without creating a booking
+  Future<Map<String, dynamic>> predictBooking({
+    required String roomCode,
+    required String date,
+    required int startHour,
+    required int endHour,
+    required int nStudents,
+  }) async =>
+      await _post('booking/predict', {
+        'room_code': roomCode,
+        'date': date,
+        'start_hour': startHour,
+        'end_hour': endHour,
+        'n_students': nStudents,
+      }) as Map<String, dynamic>;
+
+  /// Create a new booking
+  Future<Map<String, dynamic>> createBooking({
+    required String teacherId,
+    required String roomCode,
+    required String date,
+    required int startHour,
+    required int endHour,
+    required int nStudents,
+    required String minPerformance,
+  }) async =>
+      await _post('booking/create', {
+        'teacher_id': teacherId,
+        'room_code': roomCode,
+        'date': date,
+        'start_hour': startHour,
+        'end_hour': endHour,
+        'n_students': nStudents,
+        'min_performance': minPerformance,
+      }) as Map<String, dynamic>;
+
+  /// Cancel a booking by ID
+  Future<Map<String, dynamic>> cancelBooking(String bookingId) async =>
+      await _post('booking/cancel', {'booking_id': bookingId}) as Map<String, dynamic>;
+
+  /// List bookings with optional filters
+  Future<Map<String, dynamic>> listBookings({
+    String? teacherId,
+    String? roomCode,
+    String? date,
+  }) async {
+    final params = <String, String>{};
+    if (teacherId != null) params['teacher_id'] = teacherId;
+    if (roomCode != null) params['room_code'] = roomCode;
+    if (date != null) params['date'] = date;
+    final uri = Uri.parse('$baseUrl/booking/list').replace(queryParameters: params);
+    final response = await http.get(uri);
+    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
+    throw Exception('${response.statusCode} /booking/list');
+  }
+
+  /// Suggest the best available time slot
+  Future<Map<String, dynamic>> suggestBestSlot({
+    required String roomCode,
+    required String date,
+    required int durationHours,
+    required int nStudents,
+  }) async =>
+      await _post('booking/suggest-slot', {
+        'room_code': roomCode,
+        'date': date,
+        'duration_hours': durationHours,
+        'n_students': nStudents,
+      }) as Map<String, dynamic>;
+
+  /// Find alternative rooms on the same floor
+  Future<Map<String, dynamic>> findAlternatives({
+    required String roomCode,
+    required String date,
+    required int startHour,
+    required int endHour,
+    required int nStudents,
+    required String minPerformance,
+  }) async =>
+      await _post('booking/alternatives', {
+        'room_code': roomCode,
+        'date': date,
+        'start_hour': startHour,
+        'end_hour': endHour,
+        'n_students': nStudents,
+        'min_performance': minPerformance,
+      }) as Map<String, dynamic>;
 }
+
