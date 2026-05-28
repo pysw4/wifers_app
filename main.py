@@ -724,21 +724,83 @@ async def get_ap_daily_trend(ap_name: str):
     accuracy_vs_actual = None
     if actual_data and actual_data.get("hourly"):
         hourly_actual = actual_data["hourly"]
+        
+        # --- Interpolate missing hours to get a full 24-hour curve ---
+        # Build a complete 0..23 array, filling gaps with linear interpolation
+        full_actual = {}
+        actual_hours = sorted(hourly_actual.keys())
+        
+        if len(actual_hours) >= 2:
+            # Interpolate between known points
+            for h in range(24):
+                if h in hourly_actual:
+                    full_actual[h] = {
+                        "actual_mean": hourly_actual[h]["actual_mean"],
+                        "samples": hourly_actual[h]["samples"],
+                        "interpolated": False,
+                    }
+                else:
+                    # Find nearest known hours before and after
+                    before = [ah for ah in actual_hours if ah < h]
+                    after = [ah for ah in actual_hours if ah > h]
+                    
+                    if before and after:
+                        h_before = before[-1]
+                        h_after = after[0]
+                        v_before = hourly_actual[h_before]["actual_mean"]
+                        v_after = hourly_actual[h_after]["actual_mean"]
+                        # Linear interpolation
+                        ratio = (h - h_before) / (h_after - h_before)
+                        interpolated = v_before + (v_after - v_before) * ratio
+                        full_actual[h] = {
+                            "actual_mean": round(interpolated, 1),
+                            "samples": 0,
+                            "interpolated": True,
+                        }
+                    elif before and not after:
+                        # Extrapolate from last known value (flat)
+                        full_actual[h] = {
+                            "actual_mean": hourly_actual[before[-1]]["actual_mean"],
+                            "samples": 0,
+                            "interpolated": True,
+                        }
+                    elif after and not before:
+                        # Extrapolate from first known value (flat)
+                        full_actual[h] = {
+                            "actual_mean": hourly_actual[after[0]]["actual_mean"],
+                            "samples": 0,
+                            "interpolated": True,
+                        }
+        elif len(actual_hours) == 1:
+            # Only one hour known — use it for all hours
+            single_h = actual_hours[0]
+            single_v = hourly_actual[single_h]["actual_mean"]
+            for h in range(24):
+                full_actual[h] = {
+                    "actual_mean": single_v,
+                    "samples": hourly_actual[single_h]["samples"] if h == single_h else 0,
+                    "interpolated": h != single_h,
+                }
+        else:
+            full_actual = {h: v for h, v in hourly_actual.items()}
+        
+        # Now build comparison using the full 24-hour actual data
         diffs = []
         actual_hourly_list = []
         for h_data in hourly_data:
             h = h_data["hour"]
-            if h in hourly_actual:
+            if h in full_actual:
                 pred_db = h_data["signal_db"]
-                actual_db = hourly_actual[h]["actual_mean"]
+                actual_db = full_actual[h]["actual_mean"]
                 diff = abs(pred_db - actual_db)
                 diffs.append(diff)
                 actual_hourly_list.append({
                     "hour": h,
                     "actual_mean": actual_db,
-                    "samples": hourly_actual[h]["samples"],
+                    "samples": full_actual[h].get("samples", 0),
                     "predicted_db": pred_db,
                     "diff": round(diff, 1),
+                    "interpolated": full_actual[h].get("interpolated", False),
                 })
         
         if diffs:
@@ -752,9 +814,9 @@ async def get_ap_daily_trend(ap_name: str):
             status_total = 0
             for h_data in hourly_data:
                 h = h_data["hour"]
-                if h in hourly_actual:
+                if h in full_actual:
                     pred_status = _dbm_to_status(h_data["signal_db"])
-                    actual_status = _dbm_to_status(hourly_actual[h]["actual_mean"])
+                    actual_status = _dbm_to_status(full_actual[h]["actual_mean"])
                     if pred_status == actual_status:
                         status_correct += 1
                     status_total += 1

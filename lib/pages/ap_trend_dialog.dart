@@ -28,7 +28,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
   Map<String, dynamic> _accuracy = {};
   Map<String, dynamic>? _accuracyVsActual; // accuracy_vs_actual from trend API
   bool _showBars = true; // Toggle line chart / bar chart
-  bool _showActual = false; // Toggle actual average overlay
+  bool _showAverage = false; // Toggle actual average overlay
 
   /// Map backend day names ('mon'/'tue'/.../'sun') to display labels
   static const Map<String, String> _dayLabels = {
@@ -227,14 +227,14 @@ class _APTrendDialogState extends State<APTrendDialog> {
                 // Toggle actual average overlay (only if data available)
                 if (_accuracyVsActual != null && _accuracyVsActual!['hourly'] != null)
                   TextButton.icon(
-                    onPressed: () => setState(() => _showActual = !_showActual),
+                    onPressed: () => setState(() => _showAverage = !_showAverage),
                     icon: Icon(
-                      _showActual ? Icons.visibility : Icons.visibility_off,
+                      _showAverage ? Icons.visibility : Icons.visibility_off,
                       size: 18,
                       color: Colors.green,
                     ),
                     label: Text(
-                      _showActual ? 'Hide Actual' : 'Show Actual',
+                      _showAverage ? 'Hide Average' : 'Show Average',
                       style: const TextStyle(fontSize: 12, color: Colors.green),
                     ),
                   ),
@@ -585,14 +585,14 @@ class _APTrendDialogState extends State<APTrendDialog> {
                 
                 // Check if actual data exists for this hour
                 String actualStr = '';
-                if (_showActual && _accuracyVsActual != null) {
+                if (_showAverage && _accuracyVsActual != null) {
                   final hourly = _accuracyVsActual!['hourly'] as List<dynamic>?;
                   if (hourly != null) {
                     for (final entry in hourly) {
                       if ((entry['hour'] as num).toInt() == group.x) {
                         final actualDb = (entry['actual_mean'] as num).toDouble();
                         final diff = (entry['diff'] as num).toDouble();
-                        actualStr = '\nActual: ${actualDb.toStringAsFixed(1)} dBm\nDiff: ${diff.toStringAsFixed(1)} dBm';
+                        actualStr = '\nAvg: ${actualDb.toStringAsFixed(1)} dBm\nDiff: ${diff.toStringAsFixed(1)} dBm';
                         break;
                       }
                     }
@@ -694,7 +694,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
             ),
           ),
           // Actual average line (green, dashed) - only when toggled on
-          if (_showActual && actualSpots != null)
+          if (_showAverage && actualSpots != null)
             LineChartBarData(
               spots: actualSpots,
               isCurved: true,
@@ -732,14 +732,14 @@ class _APTrendDialogState extends State<APTrendDialog> {
                 
                 // Check if actual data exists for this hour
                 String actualStr = '';
-                if (_showActual && _accuracyVsActual != null) {
+                if (_showAverage && _accuracyVsActual != null) {
                   final hourly = _accuracyVsActual!['hourly'] as List<dynamic>?;
                   if (hourly != null) {
                     for (final entry in hourly) {
                       if ((entry['hour'] as num).toInt() == spot.x.toInt()) {
                         final actualDb = (entry['actual_mean'] as num).toDouble();
                         final diff = (entry['diff'] as num).toDouble();
-                        actualStr = '\nActual: ${actualDb.toStringAsFixed(1)} dBm\nDiff: ${diff.toStringAsFixed(1)} dBm';
+                        actualStr = '\nAvg: ${actualDb.toStringAsFixed(1)} dBm\nDiff: ${diff.toStringAsFixed(1)} dBm';
                         break;
                       }
                     }

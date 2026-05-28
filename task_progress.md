@@ -1,7 +1,6 @@
-# Booking 系统修复任务
+# Task Progress: 修复实际均值曲线 + 改名 Show Average
 
-- [x] 检查 booking 系统代码
-- [x] 修复 1: 统一 `_get()` 和 `listBookings()` 使用 `ApiException`
-- [x] 修复 2: 统一前端异常捕获（所有方法支持 `ApiException`）
-- [x] 修复 3: 格式化去除多余空行
-- [x] 修复 4: 添加过去时间检查到 `_predict_booking_performance()`
+- [x] 分析问题原因
+- [x] 后端 main.py: 对缺失小时做线性插值，补全 24 小时实际均值曲线
+- [x] 前端 ap_trend_dialog.dart: Show Actual → Show Average，变量名更新
+- [ ] 验证并推送
