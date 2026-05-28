@@ -1,8 +1,6 @@
-# Task Progress: 预测 vs 实际准确率
+# Task Progress: 预测 vs 实际准确率（简化版）
 
 - [x] 分析现有代码和数据来源
-- [x] 后端 main.py: 添加 `_actual_signal_data` 加载 clientes_processed.csv 实际测量数据
-- [x] 后端 main.py: 在 trend API 中计算 MAE 和 signal_accuracy 并附加到响应
-- [x] 后端 main.py: 新增 `GET /predict/signal_strength/accuracy/{ap_name}` 端点
-- [x] 前端 api_service.dart: 添加 `getAPSignalAccuracy` 方法
-- [x] 前端 ap_trend_dialog.dart: 显示准确率卡片 + "Show Actual" 切换按钮 + 双线对比
+- [x] 创建 `precompute_actual_averages.py` — 从 CSV 预计算实际信号均值 → JSON
+- [x] 修改 `main.py` — 从读 CSV 改为读预计算 JSON
+- [x] 验证 JSON 生成和后端加载逻辑

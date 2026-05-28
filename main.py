@@ -82,43 +82,37 @@ _actual_signal_data: dict[str, dict] = {}  # {ap_name_lower: {hourly: {hour: {ac
 _actual_signal_loaded: bool = False
 
 def _load_actual_signal_data():
-    """Load actual signal measurements from clientes_processed.csv and aggregate by AP + hour."""
+    """Load precomputed actual signal averages from JSON (not CSV)."""
     global _actual_signal_data, _actual_signal_loaded
     if _actual_signal_loaded:
         return _actual_signal_data
     
-    csv_path = BASE_DIR / "clientes_processed.csv"
-    if not csv_path.exists():
-        print(f"[WARN] Actual signal data file not found: {csv_path}")
+    json_path = BASE_DIR / "precomputed" / "actual_signal_averages.json"
+    if not json_path.exists():
+        print(f"[WARN] Precomputed actual signal averages not found: {json_path}")
         _actual_signal_loaded = True
         return _actual_signal_data
     
     try:
-        print(f"[INFO] Loading actual signal data from {csv_path}...")
-        cli = pd.read_csv(csv_path, nrows=500000)
-        print(f"[INFO] Loaded {len(cli)} client samples")
+        print(f"[INFO] Loading precomputed actual signal averages from {json_path}...")
+        with open(json_path) as f:
+            raw = json.load(f)
         
-        for ap_name in cli['associated_device_name'].unique():
-            ap_data = cli[cli['associated_device_name'] == ap_name]
-            if len(ap_data) < 5:
-                continue
-            # Aggregate by hour: mean signal_db and sample count
-            hourly = ap_data.groupby('hour')['signal_db'].agg(['mean', 'count'])
-            hourly_dict = {}
-            for h, row in hourly.iterrows():
-                hourly_dict[int(h)] = {
-                    "actual_mean": round(float(row['mean']), 1),
-                    "samples": int(row['count']),
-                }
-            _actual_signal_data[ap_name.strip().lower()] = {
-                "hourly": hourly_dict,
-                "total_measurements": len(ap_data),
+        # Convert string hour keys back to int for consistency
+        for ap_key, ap_data in raw.items():
+            hourly = ap_data.get("hourly", {})
+            converted_hourly = {}
+            for h_str, h_data in hourly.items():
+                converted_hourly[int(h_str)] = h_data
+            _actual_signal_data[ap_key] = {
+                "hourly": converted_hourly,
+                "total_measurements": ap_data["total_measurements"],
             }
         
-        print(f"[INFO] Loaded actual signal data for {len(_actual_signal_data)} APs")
+        print(f"[INFO] Loaded actual signal averages for {len(_actual_signal_data)} APs")
         _actual_signal_loaded = True
     except Exception as e:
-        print(f"[ERROR] Failed to load actual signal data: {e}")
+        print(f"[ERROR] Failed to load actual signal averages: {e}")
     
     return _actual_signal_data
 
