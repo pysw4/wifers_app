@@ -2,17 +2,18 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 /// Service to load pre-computed heatmap data from static files
-/// served by the Render Static Site (not the API backend).
+/// served alongside the Flutter web app (not the API backend).
 ///
 /// This avoids Render free-tier CPU quota exhaustion and cold starts.
 /// Files are stored in web/heatmaps/{day}/heatmap_h{hour}.json
+/// and served from the same origin as the Flutter web app.
 class HeatmapAssetService {
   /// Base URL for heatmap static files.
-  /// Uses the same host as the Flutter web app itself.
+  /// Uses the same host as the Flutter web app itself (relative path).
   static String get _baseUrl {
-    // In production, use relative path (same origin)
-    // In development, use the Render static site URL
-    return 'https://wifers-app-api.onrender.com';
+    // Use relative path so it works in both development and production
+    // (same origin as the Flutter web app)
+    return '';
   }
 
   /// Load heatmap data for a given day and hour from static files.
@@ -23,7 +24,7 @@ class HeatmapAssetService {
     required String day,
   }) async {
     final effectiveHour = hour < 7 ? 3 : hour; // Match backend's NIGHT_REPRESENTATIVE_HOUR
-    final url = '$_baseUrl/heatmaps/$day/heatmap_h$effectiveHour.json';
+    final url = '/heatmaps/$day/heatmap_h$effectiveHour.json';
 
     try {
       final response = await http.get(Uri.parse(url));

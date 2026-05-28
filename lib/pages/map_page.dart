@@ -794,21 +794,29 @@ class _MapPageState extends State<MapPage> {
 
   void _showAPOptions(APInfo ap, {double? signalDb}) async {
     String predictedStatus = 'unknown';
+    String? apiError;
     try {
-      final features = {
-        'client_count': 10,
-        'cpu_utilization': 50.0,
-        'mem_free': 1000.0,
-        'mem_total': 2000.0,
-        'last_modified': 1640995200.0,
-        'hour': DateTime.now().hour.toDouble(),
-        'mem_usage': 50.0,
-        'overloaded': 0,
-      };
-      final result = await _apiService.predictAPStatus(features);
-      predictedStatus = result['prediction'] ?? 'unknown';
+      // v3 API: send ap_name + current time features for status prediction
+      final now = DateTime.now();
+      final weekday = now.weekday; // 1=Mon, 7=Sun
+      final apName = ap.name?.trim() ?? '';
+      if (apName.isEmpty) {
+        apiError = 'AP name is empty';
+        predictedStatus = 'error';
+      } else {
+        final result = await _apiService.predictAPStatus({
+          'ap_name': apName,
+          'hour': now.hour.toDouble(),
+          'day_of_week': (weekday - 1).toDouble(), // 0=Mon, 6=Sun
+          'is_weekend': (weekday >= 6) ? 1.0 : 0.0,
+          'month': now.month.toDouble(),
+          'day_of_month': now.day.toDouble(),
+        });
+        predictedStatus = result['prediction'] ?? result['status'] ?? 'unknown';
+      }
     } catch (e) {
       predictedStatus = 'error';
+      apiError = e.toString();
     }
 
     final color = predictedStatus == 'Up'
@@ -1136,10 +1144,10 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _showAPTrend(APInfo ap) {
-    // 使用 Navigator.of(context, rootNavigator: true) 确保能正确关闭 bottom sheet
-    final navigator = Navigator.of(context);
-    navigator.pop(); // 关闭 bottom sheet
+    // 先关闭 bottom sheet
+    Navigator.of(context, rootNavigator: true).pop();
     // 使用 rootNavigator 打开 dialog，避免 context 失效问题
+    if (!mounted) return;
     showDialog(
       context: context,
       builder: (dialogContext) => APTrendDialog(

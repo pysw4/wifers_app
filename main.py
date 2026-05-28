@@ -406,6 +406,13 @@ def _predict_booking_performance(room_code: str, date_str: str, start_hour: int,
     ap_name = ap_info["ap_name"]
     ap_entry = _find_ap_in_index(ap_name)
 
+    if hours_until < 0:
+        return {
+            "ap_name": ap_name,
+            "performance": None,
+            "warning": "Cannot predict for a past time slot"
+        }
+
     if hours_until > 5:
         return {
             "ap_name": ap_name,

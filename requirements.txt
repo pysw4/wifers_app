@@ -23,6 +23,8 @@ matplotlib==3.10.8
 networkx==3.6.1
 numpy==2.4.3
 opencv-python==4.13.0.92
+paddlepaddle==3.0.0
+paddleocr==2.9.1
 osmnx==2.1.0
 packaging==26.0
 pandas==3.0.1

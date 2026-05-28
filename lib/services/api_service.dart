@@ -20,7 +20,15 @@ class ApiService {
     final uri = Uri.parse('$baseUrl/$path').replace(queryParameters: params);
     final response = await http.get(uri);
     if (response.statusCode == 200) return jsonDecode(response.body);
-    throw Exception('${response.statusCode} $path');
+    if (response.statusCode == 422) {
+      final detail = jsonDecode(response.body);
+      throw ApiException(
+        422,
+        detail['detail'] ?? 'Input validation failed',
+        details: detail,
+      );
+    }
+    throw ApiException(response.statusCode, '${response.statusCode} $path');
   }
 
   Future<dynamic> _post(String path, Map<String, dynamic> body) async {
@@ -38,7 +46,7 @@ class ApiService {
         details: detail,
       );
     }
-    throw Exception('${response.statusCode} $path');
+    throw ApiException(response.statusCode, '${response.statusCode} $path');
   }
 
   Future<List<LatLng>> fetchRoute(double lng, double lat, double destLng, double destLat) async {
@@ -166,10 +174,7 @@ class ApiService {
     if (teacherId != null) params['teacher_id'] = teacherId;
     if (roomCode != null) params['room_code'] = roomCode;
     if (date != null) params['date'] = date;
-    final uri = Uri.parse('$baseUrl/booking/list').replace(queryParameters: params);
-    final response = await http.get(uri);
-    if (response.statusCode == 200) return jsonDecode(response.body) as Map<String, dynamic>;
-    throw Exception('${response.statusCode} /booking/list');
+    return await _get('booking/list', params) as Map<String, dynamic>;
   }
 
   /// Suggest the best available time slot

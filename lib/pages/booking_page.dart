@@ -31,7 +31,6 @@ class _BookingPageState extends State<BookingPage> {
   String? _predictedPerformance;
   String? _predictionWarning;
 
-
   // Alternatives
   List<AlternativeRoom> _alternatives = [];
   bool _showAlternatives = false;
@@ -77,6 +76,8 @@ class _BookingPageState extends State<BookingPage> {
         _showMyBookings = true;
         _status = '${list.length} booking(s) found';
       });
+    } on ApiException catch (e) {
+      _showSnackBar('Failed to load bookings: ${e.message}');
     } catch (e) {
       _showSnackBar('Failed to load bookings: $e');
     } finally {
@@ -222,6 +223,8 @@ class _BookingPageState extends State<BookingPage> {
         _alternatives = list;
         _showAlternatives = true;
       });
+    } on ApiException catch (e) {
+      _showSnackBar('Failed to find alternatives: ${e.message}');
     } catch (e) {
       _showSnackBar('Failed to find alternatives: $e');
     }
@@ -258,6 +261,9 @@ class _BookingPageState extends State<BookingPage> {
           _status = 'No available slots found';
         });
       }
+    } on ApiException catch (e) {
+      _showSnackBar('Failed to suggest slot: ${e.message}');
+      setState(() => _status = 'Error: ${e.message}');
     } catch (e) {
       _showSnackBar('Failed to suggest slot: $e');
       setState(() => _status = 'Error: $e');
@@ -271,6 +277,8 @@ class _BookingPageState extends State<BookingPage> {
       await _api.cancelBooking(bookingId);
       _showSnackBar('Booking cancelled');
       _loadMyBookings();
+    } on ApiException catch (e) {
+      _showSnackBar('Failed to cancel: ${e.message}');
     } catch (e) {
       _showSnackBar('Failed to cancel: $e');
     }
@@ -421,7 +429,7 @@ class _BookingPageState extends State<BookingPage> {
               children: [
                 Expanded(
                   child: DropdownButtonFormField<int>(
-                    initialValue: _startHour,
+                    value: _startHour,
                     decoration: const InputDecoration(
                       labelText: 'Start',
                       border: OutlineInputBorder(),
@@ -446,7 +454,7 @@ class _BookingPageState extends State<BookingPage> {
                 ),
                 Expanded(
                   child: DropdownButtonFormField<int>(
-                    initialValue: _endHour,
+                    value: _endHour,
                     decoration: const InputDecoration(
                       labelText: 'End',
                       border: OutlineInputBorder(),
@@ -479,7 +487,7 @@ class _BookingPageState extends State<BookingPage> {
 
             // Min performance
             DropdownButtonFormField<String>(
-              initialValue: _minPerformance,
+              value: _minPerformance,
               decoration: const InputDecoration(
                 labelText: 'Minimum Acceptable Performance',
                 prefixIcon: Icon(Icons.signal_wifi_4_bar),
@@ -760,7 +768,9 @@ class _BookingPageState extends State<BookingPage> {
                           backgroundColor: Colors.indigo[50],
                           radius: 18,
                           child: Text(
-                            b.bookingId.substring(0, 3),
+                            b.bookingId.length >= 3
+                                ? b.bookingId.substring(0, 3)
+                                : b.bookingId,
                             style: TextStyle(
                                 fontSize: 11,
                                 fontWeight: FontWeight.bold,
