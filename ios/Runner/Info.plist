@@ -75,6 +75,10 @@
 	<string>We need your location to find aps</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>need local network to connect with backend</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Wifers needs camera access to recognise AP access points from photos</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Wifers needs photo library access to recognise AP access points from your photos</string>
 </dict>
 
 </plist>
