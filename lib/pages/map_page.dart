@@ -1197,47 +1197,26 @@ class _MapPageState extends State<MapPage> {
 
   /// Map a signal_db value to a color using the dynamic data range.
   /// Uses [_signalMinDb] and [_signalMaxDb] computed from actual data.
-  /// The gradient goes: Deep Red → Red → Orange → Yellow → Vibrant Green
+  /// Uses 4 distinct, high-contrast colors for maximum visual separation:
+  ///   Red (#E53935) → Orange (#FB8C00) → Lime (#C0CA33) → Teal (#00897B)
+  /// Each color is a flat (non-interpolated) band so adjacent grid cells
+  /// with slightly different signal strengths are clearly distinguishable.
   Color _signalDbToColor(double signalDb) {
     final minDb = _signalMinDb;
     final maxDb = _signalMaxDb;
     final clamped = signalDb.clamp(minDb, maxDb);
-    // Normalize: minDb → 0.0 (worst/red), maxDb → 1.0 (best/green)
+    // Normalize: minDb → 0.0 (worst), maxDb → 1.0 (best)
     final t = (clamped - minDb) / (maxDb - minDb);
-    // Use 4-stop gradient for more visual distinction:
-    // Deep Red → Red → Orange → Yellow → Vibrant Green
+
+    // 4 discrete bands with high-contrast colors
     if (t < 0.25) {
-      // Deep Red → Red
-      final u = t / 0.25;
-      return Color.lerp(
-        const Color(0xFFB71C1C), // Deep Red
-        const Color(0xFFD50000), // Red
-        u,
-      )!;
+      return const Color(0xFFE53935); // Red (worst)
     } else if (t < 0.50) {
-      // Red → Orange
-      final u = (t - 0.25) / 0.25;
-      return Color.lerp(
-        const Color(0xFFD50000), // Red
-        const Color(0xFFFF6D00), // Orange
-        u,
-      )!;
+      return const Color(0xFFFB8C00); // Orange
     } else if (t < 0.75) {
-      // Orange → Yellow
-      final u = (t - 0.50) / 0.25;
-      return Color.lerp(
-        const Color(0xFFFF6D00), // Orange
-        const Color(0xFFFFEA00), // Yellow
-        u,
-      )!;
+      return const Color(0xFFC0CA33); // Lime
     } else {
-      // Yellow → Vibrant Green
-      final u = (t - 0.75) / 0.25;
-      return Color.lerp(
-        const Color(0xFFFFEA00), // Yellow
-        const Color(0xFF00E676), // Vibrant Green
-        u,
-      )!;
+      return const Color(0xFF00897B); // Teal (best)
     }
   }
 
@@ -1301,8 +1280,8 @@ class _MapPageState extends State<MapPage> {
           LatLng(lat + halfLat, lng + halfLng),
           LatLng(lat + halfLat, lng - halfLng),
         ],
-        color: color.withValues(alpha: 0.15),
-        borderColor: color.withValues(alpha: 0.04),
+        color: color.withValues(alpha: 0.35),
+        borderColor: color.withValues(alpha: 0.12),
         borderStrokeWidth: 0.5,
       );
     }).toList();
@@ -1331,19 +1310,23 @@ class _MapPageState extends State<MapPage> {
                   style: const TextStyle(fontSize: 11, color: Colors.grey),
                 ),
                 const Divider(height: 8),
-                // Continuous gradient legend bar
+                // Discrete color bands legend (matches _signalDbToColor)
                 Container(
                   height: 16,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(4),
                     gradient: const LinearGradient(
                       colors: [
-                        Color(0xFFB71C1C), // Deep Red (worst)
-                        Color(0xFFD50000), // Red
-                        Color(0xFFFF6D00), // Orange
-                        Color(0xFFFFEA00), // Yellow
-                        Color(0xFF00E676), // Vibrant Green (best)
+                        Color(0xFFE53935), // Red (worst)
+                        Color(0xFFE53935),
+                        Color(0xFFFB8C00), // Orange
+                        Color(0xFFFB8C00),
+                        Color(0xFFC0CA33), // Lime
+                        Color(0xFFC0CA33),
+                        Color(0xFF00897B), // Teal (best)
+                        Color(0xFF00897B),
                       ],
+                      stops: [0.0, 0.25, 0.25, 0.50, 0.50, 0.75, 0.75, 1.0],
                     ),
                   ),
                 ),
@@ -1359,6 +1342,14 @@ class _MapPageState extends State<MapPage> {
                       '${_signalMaxDb.toStringAsFixed(0)} dBm',
                       style: const TextStyle(fontSize: 10, color: Colors.grey),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: const [
+                    Text('Weak', style: TextStyle(fontSize: 9, color: Colors.grey)),
+                    Text('Strong', style: TextStyle(fontSize: 9, color: Colors.grey)),
                   ],
                 ),
                 const Divider(height: 8),
