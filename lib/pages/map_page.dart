@@ -784,7 +784,7 @@ class _MapPageState extends State<MapPage> {
 
   /// Maximum distance (in meters) from the nearest AP for a grid point
   /// to be considered "covered". Points farther than this are hidden.
-  static const double _apCoverageRadiusM = 30.0;
+  static const double _apCoverageRadiusM = 40.0;
 
   /// Haversine distance in meters between two lat/lng points.
   static double _haversineM(double lat1, double lng1, double lat2, double lng2) {
@@ -799,15 +799,18 @@ class _MapPageState extends State<MapPage> {
     return r * c;
   }
 
-  /// Map a signal_db value to a color.
-  /// - Strong signal (-50 dBm or better) → green
-  /// - Medium (-60 dBm) → yellow
-  /// - Weak (-70 dBm or worse) → red
+  /// Map a signal_db value to a color using the actual data range.
+  /// The precomputed heatmap data has signal_db in roughly [-71, -57] dBm.
+  /// - -71 dBm (worst in data) → red
+  /// - -64 dBm (median) → yellow
+  /// - -57 dBm (best in data) → green
   static Color _signalDbToColor(double signalDb) {
-    // Clamp to [-80, -50] range
-    final clamped = signalDb.clamp(-80.0, -50.0);
-    // Normalize: -80 → 0.0 (worst/red), -50 → 1.0 (best/green)
-    final t = (clamped + 80.0) / 30.0;
+    // Use the actual observed range from the precomputed data
+    const double minDb = -71.0;
+    const double maxDb = -57.0;
+    final clamped = signalDb.clamp(minDb, maxDb);
+    // Normalize: -71 → 0.0 (worst/red), -57 → 1.0 (best/green)
+    final t = (clamped - minDb) / (maxDb - minDb);
     // Interpolate: red (0.0) → yellow (0.5) → green (1.0)
     if (t < 0.5) {
       // Red → Yellow
