@@ -21,6 +21,7 @@ class _BookingPageState extends State<BookingPage> {
   int _endHour = 12;
   String _minPerformance = 'Fair';
   bool _loading = false;
+  bool _myBookingsLoading = false;
   String _status = '';
 
   // Booking results
@@ -65,7 +66,11 @@ class _BookingPageState extends State<BookingPage> {
 
   Future<void> _loadMyBookings() async {
     final tid = _teacherIdController.text.trim();
-    setState(() => _loading = true);
+    if (tid.isEmpty) {
+      _showSnackBar('Please enter a Teacher ID first');
+      return;
+    }
+    setState(() => _myBookingsLoading = true);
     try {
       final resp = await _api.listBookings(teacherId: tid);
       final list = (resp['bookings'] as List)
@@ -81,7 +86,7 @@ class _BookingPageState extends State<BookingPage> {
     } catch (e) {
       _showSnackBar('Failed to load bookings: $e');
     } finally {
-      setState(() => _loading = false);
+      setState(() => _myBookingsLoading = false);
     }
   }
 
@@ -90,6 +95,14 @@ class _BookingPageState extends State<BookingPage> {
     final teacherId = _teacherIdController.text.trim();
     final nStudentsStr = _nStudentsController.text.trim();
 
+    if (teacherId.isEmpty) {
+      _showSnackBar('Please enter a Teacher ID');
+      return;
+    }
+    if (roomCode.isEmpty) {
+      _showSnackBar('Please enter a Room Code');
+      return;
+    }
     final nStudents = int.tryParse(nStudentsStr) ?? 30;
     if (nStudents < 1 || nStudents > 200) {
       _showSnackBar('Students must be between 1 and 200');
@@ -147,12 +160,14 @@ class _BookingPageState extends State<BookingPage> {
       }
 
       // Check if performance meets minimum
+      bool perfTooLow = false;
       if (perf != null) {
         final perfRank = {'Very Poor': 0, 'Weak': 1, 'Fair': 2, 'Good': 3, 'Excellent': 4};
         final minRank = perfRank[_minPerformance] ?? 2;
         final actualRank = perfRank[perf] ?? 0;
 
         if (actualRank < minRank) {
+          perfTooLow = true;
           setState(() {
             _status =
                 'Predicted performance ($perf) is below minimum ($_minPerformance). Consider alternatives.';
@@ -163,9 +178,10 @@ class _BookingPageState extends State<BookingPage> {
           );
           // Load alternatives automatically
           _loadAlternatives();
-          return;
         }
       }
+
+      if (perfTooLow) return;
 
       // Proceed to create booking
       final createResp = await _api.createBooking(
@@ -361,7 +377,7 @@ class _BookingPageState extends State<BookingPage> {
                   icon: Icon(
                       _showMyBookings ? Icons.list : Icons.person_search),
                   tooltip: 'My Bookings',
-                  onPressed: _loadMyBookings,
+                  onPressed: _myBookingsLoading ? null : _loadMyBookings,
                 ),
               ],
             )
@@ -393,6 +409,7 @@ class _BookingPageState extends State<BookingPage> {
                 border: OutlineInputBorder(),
               ),
               textCapitalization: TextCapitalization.characters,
+              onChanged: (_) => setState(() => _availabilityHours = []),
             ),
             const SizedBox(height: 12),
 
@@ -406,7 +423,10 @@ class _BookingPageState extends State<BookingPage> {
                   lastDate: DateTime.now().add(const Duration(days: 60)),
                 );
                 if (picked != null) {
-                  setState(() => _selectedDate = picked);
+                  setState(() {
+                    _selectedDate = picked;
+                    _availabilityHours = [];
+                  });
                 }
               },
               child: InputDecorator(
