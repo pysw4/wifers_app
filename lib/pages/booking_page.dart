@@ -148,7 +148,7 @@ class _BookingPageState extends State<BookingPage> {
 
       // Check if performance meets minimum
       if (perf != null) {
-        final perfRank = {'Fair': 2, 'Good': 3, 'Excellent': 4};
+        final perfRank = {'Very Poor': 0, 'Weak': 1, 'Fair': 2, 'Good': 3, 'Excellent': 4};
         final minRank = perfRank[_minPerformance] ?? 2;
         final actualRank = perfRank[perf] ?? 0;
 

@@ -71,7 +71,7 @@ _trend_cache_time: dict[str, float] = {}
 # --- Booking system (in-memory storage) ---
 _bookings: list[dict] = []
 _room_lookup: dict[str, dict] = {}
-PERF_RANK = {'Critical': 0, 'Poor': 1, 'Fair': 2, 'Good': 3,
+PERF_RANK = {'Very Poor': 0, 'Weak': 1, 'Fair': 2, 'Good': 3,
              'Excellent': 4, 'Excellent+': 5, 'Excellent++': 6}
 
 # --- Prediction feedback / accuracy tracking ---
