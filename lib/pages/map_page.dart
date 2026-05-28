@@ -58,13 +58,10 @@ class _MapPageState extends State<MapPage> {
   static const List<String> _dayApiNames = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
   int get _currentDayIndex => DateTime.now().weekday - 1; // DateTime.monday=1 -> our index 0
   String get _currentDayApiName => _dayApiNames[_currentDayIndex];
-  final Map<String, Color> _signalColors = {
-    'Excellent': const Color(0xFF00E676), // Bright Green (strongest signal)
-    'Good': const Color(0xFF76FF03), // Light Green
-    'Fair': const Color(0xFFFFEA00), // Yellow
-    'Weak': const Color(0xFFFF6D00), // Orange
-    'Very Poor': const Color(0xFFD50000), // Red (weakest signal)
-  };
+
+  // Dynamic signal range (computed from actual data)
+  double _signalMinDb = -75.0; // default fallback
+  double _signalMaxDb = -50.0; // default fallback
 
   // Cache heatmap predictions by AP name
   Map<String, Map<String, dynamic>> _heatmapCache = {};
@@ -497,14 +494,13 @@ class _MapPageState extends State<MapPage> {
     }
 
     if (isHeatmapVisible) {
-      // Heatmap mode: color-coded markers
+      // Heatmap mode: color-coded markers using continuous gradient
       for (final ap in _aps) {
         final key = ap.id ?? ap.name ?? '';
         final prediction = _heatmapCache[key];
         if (prediction == null) continue;
         final dbm = prediction['signal_db'] as num? ?? -70;
-        final quality = prediction['signal_quality'] as String? ?? 'Fair';
-        final color = _signalColors[quality] ?? Colors.grey;
+        final color = _signalDbToColor(dbm.toDouble());
         final showDetail = heatmapSize >= 14;
 
         allMarkers.add(
@@ -734,13 +730,37 @@ class _MapPageState extends State<MapPage> {
         .map<Map<String, dynamic>>((p) => Map<String, dynamic>.from(p as Map))
         .toList();
 
+    // 计算实际信号范围的动态映射
+    // 使用百分位数来避免极端值影响颜色分布
+    double minDb = -75.0;
+    double maxDb = -50.0;
+    if (parsedSmoothPoints.isNotEmpty) {
+      final signals = parsedSmoothPoints
+          .map<double>((p) => (p['signal_db'] as num?)?.toDouble() ?? -70.0)
+          .toList()
+        ..sort();
+      // 使用 5% 和 95% 百分位数作为映射范围，避免极端值
+      final n = signals.length;
+      minDb = signals[(n * 0.05).round().clamp(0, n - 1)];
+      maxDb = signals[(n * 0.95).round().clamp(0, n - 1)];
+      // 确保至少 3dB 的跨度
+      if (maxDb - minDb < 3.0) {
+        final mid = (minDb + maxDb) / 2;
+        minDb = mid - 1.5;
+        maxDb = mid + 1.5;
+      }
+    }
+
     setState(() {
       _heatmapCache = cache;
       _smoothHeatmapPoints = parsedSmoothPoints;
+      _signalMinDb = minDb;
+      _signalMaxDb = maxDb;
       _isLoadingHeatmap = false;
     });
 
     debugPrint('Loaded ${cache.length} AP points + ${parsedSmoothPoints.length} grid points');
+    debugPrint('Signal range: ${minDb.toStringAsFixed(1)} to ${maxDb.toStringAsFixed(1)} dBm');
   }
 
   Future<void> _showHourPicker() async {
@@ -1175,17 +1195,14 @@ class _MapPageState extends State<MapPage> {
     return r * c;
   }
 
-  /// Map a signal_db value to a color using the actual data range.
-  /// The precomputed heatmap data has signal_db in roughly [-71, -57] dBm.
-  /// - -71 dBm (worst in data) → deep red
-  /// - -64 dBm (median) → orange
-  /// - -57 dBm (best in data) → vibrant green
-  static Color _signalDbToColor(double signalDb) {
-    // Use the actual observed range from the precomputed data
-    const double minDb = -71.0;
-    const double maxDb = -57.0;
+  /// Map a signal_db value to a color using the dynamic data range.
+  /// Uses [_signalMinDb] and [_signalMaxDb] computed from actual data.
+  /// The gradient goes: Deep Red → Red → Orange → Yellow → Vibrant Green
+  Color _signalDbToColor(double signalDb) {
+    final minDb = _signalMinDb;
+    final maxDb = _signalMaxDb;
     final clamped = signalDb.clamp(minDb, maxDb);
-    // Normalize: -71 → 0.0 (worst/red), -57 → 1.0 (best/green)
+    // Normalize: minDb → 0.0 (worst/red), maxDb → 1.0 (best/green)
     final t = (clamped - minDb) / (maxDb - minDb);
     // Use 4-stop gradient for more visual distinction:
     // Deep Red → Red → Orange → Yellow → Vibrant Green
@@ -1314,29 +1331,36 @@ class _MapPageState extends State<MapPage> {
                   style: const TextStyle(fontSize: 11, color: Colors.grey),
                 ),
                 const Divider(height: 8),
-                for (final entry in _signalColors.entries)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 12,
-                          height: 12,
-                          decoration: BoxDecoration(
-                            color: entry.value.withValues(alpha: 0.6),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Expanded(
-                          child: Text(
-                            entry.key,
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                        ),
+                // Continuous gradient legend bar
+                Container(
+                  height: 16,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(4),
+                    gradient: const LinearGradient(
+                      colors: [
+                        Color(0xFFB71C1C), // Deep Red (worst)
+                        Color(0xFFD50000), // Red
+                        Color(0xFFFF6D00), // Orange
+                        Color(0xFFFFEA00), // Yellow
+                        Color(0xFF00E676), // Vibrant Green (best)
                       ],
                     ),
                   ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '${_signalMinDb.toStringAsFixed(0)} dBm',
+                      style: const TextStyle(fontSize: 10, color: Colors.grey),
+                    ),
+                    Text(
+                      '${_signalMaxDb.toStringAsFixed(0)} dBm',
+                      style: const TextStyle(fontSize: 10, color: Colors.grey),
+                    ),
+                  ],
+                ),
                 const Divider(height: 8),
                 Text(
                   '${_smoothHeatmapPoints.length} grid points',
