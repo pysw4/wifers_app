@@ -445,8 +445,8 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  /// 根据当前地图缩放级别计算 AP 图标大小
-  /// 缩放级别越大（放得越大），图标越大
+  /// Calculate AP marker size based on current map zoom level.
+  /// Higher zoom (more zoomed in) = larger markers.
   double _getMarkerSize({bool isHeatmap = false}) {
     final zoom = _currentZoom;
 
@@ -455,17 +455,17 @@ class _MapPageState extends State<MapPage> {
       if (zoom >= 16) return 24;
       if (zoom >= 14) return 16;
       if (zoom >= 12) return 10;
-      return 8; // zoom < 12，即使热力图也变小
+      return 8; // zoom < 12: heatmap markers also shrink
     }
-    // 普通模式
+    // Normal mode
     if (zoom >= 18) return 14;
     if (zoom >= 16) return 8;
     if (zoom >= 14) return 5;
     if (zoom >= 12) return 3;
-    return 0; // zoom < 12 时隐藏普通蓝点
+    return 0; // zoom < 12: hide normal blue dots
   }
 
-  /// 热力图模式下数字字体大小
+  /// Font size for heatmap mode signal strength numbers.
   double _getHeatmapTextSize() {
     final zoom = _currentZoom;
 
@@ -476,7 +476,8 @@ class _MapPageState extends State<MapPage> {
     return 4;
   }
 
-  /// 热力图模式下是否显示 AP 标记（缩放太小时只显示热力图网格不显示点）
+  /// Whether to show AP markers in heatmap mode.
+  /// At very low zoom levels, only show the smooth grid, not individual points.
   bool get _shouldShowMarkers {
     if (_smoothHeatmapPoints.isNotEmpty && _currentZoom < 12) return false;
     return true;
@@ -614,7 +615,7 @@ class _MapPageState extends State<MapPage> {
     super.dispose();
   }
 
-  /// 判断用户是否在校园附近
+  /// Check if the user is near the UAB campus.
   bool _isNearCampus(LatLng location) {
     final distance = const Distance().as(
       LengthUnit.Kilometer,
@@ -632,7 +633,7 @@ class _MapPageState extends State<MapPage> {
         _currentLocation = userLocation;
       });
 
-      // 如果用户不在校园附近，地图默认显示校园中心
+      // If user is outside campus, center map on campus by default
       if (!_isNearCampus(userLocation)) {
         _mapController.move(_center, _defaultZoom);
       }
@@ -648,7 +649,7 @@ class _MapPageState extends State<MapPage> {
         });
       });
     } catch (e) {
-      // Handle location error - 默认显示校园中心
+      // Handle location error - default to campus center
       _mapController.move(_center, _defaultZoom);
     }
   }
@@ -710,7 +711,7 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _processHeatmapData(Map<String, dynamic> data) {
-    // 解析 AP 点数据
+    // Parse AP point data
     final apPointsData = data['ap_points'] as Map<String, dynamic>?;
     final points = apPointsData?['points'] as List<dynamic>? ?? [];
     final Map<String, Map<String, dynamic>> cache = {};
@@ -725,17 +726,17 @@ class _MapPageState extends State<MapPage> {
       };
     }
 
-    // 解析平滑网格数据
+    // Parse smooth grid data
     final smoothGridData = data['smooth_grid'] as Map<String, dynamic>?;
     final smoothPoints = smoothGridData?['points'] as List<dynamic>? ?? [];
     final parsedSmoothPoints = smoothPoints
         .map<Map<String, dynamic>>((p) => Map<String, dynamic>.from(p as Map))
         .toList();
 
-    // 计算实际信号范围的动态映射
-    // 使用两个范围：
-    //   - _signalMinDb / _signalMaxDb: 实际 min/max，用于图例显示（真实范围）
-    //   - _colorMapMinDb / _colorMapMaxDb: p2~p98 百分位，用于颜色映射（避免极端值拉偏）
+    // Compute dynamic signal range mapping
+    // Uses two ranges:
+    //   - _signalMinDb / _signalMaxDb: actual min/max for legend display (true range)
+    //   - _colorMapMinDb / _colorMapMaxDb: p2~p98 percentile for color mapping (avoid outliers)
     double legendMinDb = -85.0;
     double legendMaxDb = -45.0;
     double colorMinDb = -75.0;
@@ -747,14 +748,14 @@ class _MapPageState extends State<MapPage> {
         ..sort();
       final n = signals.length;
 
-      // 图例显示实际 min/max
+      // Legend shows actual min/max
       legendMinDb = signals.first;
       legendMaxDb = signals.last;
 
-      // 颜色映射使用 p2~p98 避免极端值拉偏
+      // Color mapping uses p2~p98 to avoid outlier skew
       colorMinDb = signals[(n * 0.02).round().clamp(0, n - 1)];
       colorMaxDb = signals[(n * 0.98).round().clamp(0, n - 1)];
-      // 确保至少 3dB 的跨度
+      // Ensure at least 3dB span
       if (colorMaxDb - colorMinDb < 3.0) {
         final mid = (colorMinDb + colorMaxDb) / 2;
         colorMinDb = mid - 1.5;
@@ -939,7 +940,7 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  /// 构建底部操作按钮（紧凑样式）
+  /// Build a compact action button for the AP bottom sheet.
   Widget _buildActionButton({
     required IconData icon,
     required String label,
@@ -995,7 +996,7 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _navigateToAP(APInfo ap) async {
-    // 先关闭 bottom sheet（使用 rootNavigator 确保只关闭 bottom sheet 不 pop 页面）
+    // Close bottom sheet first (use rootNavigator to only close the sheet, not pop the page)
     Navigator.of(context, rootNavigator: true).pop();
 
     if (_currentLocation == null) {
@@ -1094,9 +1095,9 @@ class _MapPageState extends State<MapPage> {
   }
 
   /// Navigate from the campus main entrance to the target AP.
-  /// 直接从校门（campusGate）导航到目标AP，不检查用户当前位置。
+  /// Routes directly from the campus gate to the target AP without checking user location.
   Future<void> _navigateFromGate(APInfo ap) async {
-    // 先关闭 bottom sheet
+    // Close bottom sheet first
     Navigator.of(context, rootNavigator: true).pop();
 
     if (!mounted) return;
@@ -1178,9 +1179,9 @@ class _MapPageState extends State<MapPage> {
   }
 
   void _showAPTrend(APInfo ap) {
-    // 先关闭 bottom sheet
+    // Close bottom sheet first
     Navigator.of(context, rootNavigator: true).pop();
-    // 使用 rootNavigator 打开 dialog，避免 context 失效问题
+    // Use rootNavigator to open dialog, avoiding context invalidation issues
     if (!mounted) return;
     showDialog(
       context: context,

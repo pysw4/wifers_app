@@ -154,8 +154,8 @@ for dow_idx, day_name in enumerate(DAY_NAMES):
                 'band': 5.0,  # Fixed to use 5GHz as total signal strength
                 'day_of_week': float(dow_idx),
                 'is_weekend': 1.0 if dow_idx >= 5 else 0.0,
-                'day_of_month': 15.0,  # 使用月中值作为默认
-                'month': 4.0,  # 使用4月（数据集中最常见的月份）
+                'day_of_month': 15.0,  # Use mid-month as default
+                'month': 4.0,  # Use April (most common month in dataset)
                 'ap_name_code': ap_name_code,
             })
         

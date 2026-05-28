@@ -1,12 +1,12 @@
 """
-AP Up/Down Classifier Retraining Script (v2 - 带周几和日期特征)
+AP Up/Down Classifier Retraining Script (v2 - with day-of-week and date features)
 ========================================
 Improvements:
 1. Uses all 2.66M data points (previously only 1000)
 2. Uses F1 score (instead of accuracy) to select the best model, addressing class imbalance
 3. Sets class_weight='balanced' to handle Down being only 5.63%
 4. Compares multiple models and outputs confusion matrices
-5. 新增特征: day_of_week, is_weekend, month, day_of_month — 考虑周几和日期，更精确
+5. New features: day_of_week, is_weekend, month, day_of_month — more precise with day/date context
 """
 
 import pandas as pd
@@ -37,7 +37,7 @@ os.makedirs(RESULT_DIR, exist_ok=True)
 print("=" * 70)
 print("AP Up/Down Classifier Retraining v2")
 print("Using all data points, handling class imbalance")
-print("新增特征: day_of_week, is_weekend, month, day_of_month")
+print("New features: day_of_week, is_weekend, month, day_of_month")
 print("=" * 70)
 
 # ============================================================
@@ -67,7 +67,7 @@ print(f"  Up:   {counts.get('Up', 0)} ({100-down_pct:.2f}%)")
 # ============================================================
 print("\n[3/6] Preparing features...")
 
-# 解析日期特征
+# Parse date features
 print("  Parsing date features...")
 df['date_parsed'] = pd.to_datetime(df['date'], errors='coerce')
 df['day_of_week'] = df['date_parsed'].dt.dayofweek  # 0=Monday, 6=Sunday
@@ -227,7 +227,7 @@ meta = {
     'selection_metric': 'f1_down',
     'version': 'v2',
     'features_added': ['day_of_week', 'is_weekend', 'month', 'day_of_month'],
-    'description': '考虑周几和日期的分类器，更精确',
+    'description': 'Classifier with day-of-week and date features for higher precision',
 }
 meta_path = os.path.join(MODEL_DIR, 'decision_tree_meta.json')
 with open(meta_path, 'w') as f:

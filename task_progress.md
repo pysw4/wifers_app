@@ -1,6 +1,31 @@
-# Task Progress: 修复实际均值曲线 + 改名 Show Average
+# Task Progress: Translate Chinese comments/text to English
 
-- [x] 分析问题原因
-- [x] 后端 main.py: 对缺失小时做线性插值，补全 24 小时实际均值曲线
-- [x] 前端 ap_trend_dialog.dart: Show Actual → Show Average，变量名更新
-- [x] 验证并推送
+- [x] Analyze all files for Chinese comments and text
+- [x] Fix `lib/pages/map_page.dart` - Chinese comments
+- [x] Fix `lib/pages/predictor_page.dart` - Chinese text in UI
+- [x] Fix `lib/pages/route_page.dart` - Chinese comments
+- [x] Fix `precompute_heatmaps.py` - Chinese comments
+- [x] Fix `retrain_classifier.py` - Chinese comments
+- [x] Fix `retrain_classifier_v3.py` - Chinese comments
+- [x] Fix `main.py` - Chinese comments
+- [x] Fix `helper_script.py` - Chinese comments
+- [x] Fix `train_signal_model.py` - Chinese comments
+- [x] Fix `predict.py` - Chinese comments
+- [x] Fix `predictor_lstm.py` - Chinese comments
+- [x] Fix `foto2ap_service.py` - Chinese comments
+- [x] Fix `precompute_actual_averages.py` - Chinese comments
+- [x] Fix `lib/services/api_service.dart` - Chinese comments
+- [x] Fix `lib/services/ap_data_service.dart` - Chinese comments
+- [x] Fix `lib/services/heatmap_asset_service.dart` - Chinese comments
+- [x] Fix `lib/services/foto2ap_service.dart` - Chinese comments
+- [x] Fix `lib/pages/my_home_page.dart` - Chinese comments
+- [x] Fix `lib/pages/booking_page.dart` - Chinese comments
+- [x] Fix `lib/pages/favorites_page.dart` - Chinese comments
+- [x] Fix `lib/pages/ap_trend_dialog.dart` - Chinese comments
+- [x] Fix `lib/pages/recommend_page.dart` - Chinese comments
+- [x] Fix `lib/pages/setting_page.dart` - Chinese comments
+- [x] Fix `lib/models/booking.dart` - Chinese comments
+- [x] Fix `lib/main.dart` - Chinese comments
+- [x] Update `PROJECT_ARCHITECTURE.md` - Sync with current codebase
+- [x] Update `README.md` - Sync with current codebase
+- [x] Final verification - no Chinese characters remain in any project files

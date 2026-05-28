@@ -1,14 +1,15 @@
 """
-AP Up/Down Classifier Retraining Script (v3 - 只使用推理时可获得的特征)
+AP Up/Down Classifier Retraining Script (v3 - only inference-available features)
 ========================================
-v3 改进:
-1. 移除 client_count, cpu_utilization, mem_free, mem_total, last_modified, mem_usage, overloaded
-   - 这些特征在推理时无法获取，之前用硬编码默认值填充，导致预测结果不可靠
-2. 新增特征: building_code, floor, lat, lng, predicted_signal_db
-   - building_code/floor/lat/lng 从 GeoJSON 静态获取
-   - predicted_signal_db 从信号强度模型预测得到（模型级联）
-3. 保留特征: hour, day_of_week, is_weekend, month, day_of_month
-   - 这些特征可以从系统时间获取
+v3 improvements:
+1. Removed client_count, cpu_utilization, mem_free, mem_total, last_modified, mem_usage, overloaded
+   - These features are not available at inference time; previously filled with hardcoded defaults,
+     leading to unreliable predictions
+2. New features: building_code, floor, lat, lng, predicted_signal_db
+   - building_code/floor/lat/lng obtained statically from GeoJSON
+   - predicted_signal_db from signal strength model prediction (model cascade)
+3. Retained features: hour, day_of_week, is_weekend, month, day_of_month
+   - These features can be obtained from system time
 """
 
 import pandas as pd
@@ -38,9 +39,9 @@ os.makedirs(RESULT_DIR, exist_ok=True)
 
 print("=" * 70)
 print("AP Up/Down Classifier Retraining v3")
-print("只使用推理时可获得的特征")
-print("移除: client_count, cpu_utilization, mem_free, mem_total, last_modified, mem_usage, overloaded")
-print("新增: building_code, floor, lat, lng, predicted_signal_db")
+print("Only using features available at inference time")
+print("Removed: client_count, cpu_utilization, mem_free, mem_total, last_modified, mem_usage, overloaded")
+print("Added: building_code, floor, lat, lng, predicted_signal_db")
 print("=" * 70)
 
 # ============================================================
@@ -184,18 +185,18 @@ print("\n[5/7] Preparing features...")
 
 y = (df['status'] == 'Up').astype(int).values
 
-# v3: 只使用推理时可获得的特征
+# v3: only use features available at inference time
 feature_cols = [
-    'hour',           # 系统时间
-    'day_of_week',    # 系统时间
-    'is_weekend',     # 系统时间
-    'month',          # 系统时间
-    'day_of_month',   # 系统时间
-    'building_code',  # GeoJSON 静态数据
-    'floor',          # GeoJSON 静态数据
-    'lat',            # GeoJSON 静态数据
-    'lng',            # GeoJSON 静态数据
-    'predicted_signal_db',  # 信号强度模型级联预测
+    'hour',           # System time
+    'day_of_week',    # System time
+    'is_weekend',     # System time
+    'month',          # System time
+    'day_of_month',   # System time
+    'building_code',  # GeoJSON static data
+    'floor',          # GeoJSON static data
+    'lat',            # GeoJSON static data
+    'lng',            # GeoJSON static data
+    'predicted_signal_db',  # Signal strength model cascade prediction
 ]
 
 X = df[feature_cols].copy()
@@ -345,7 +346,7 @@ meta = {
         'last_modified', 'mem_usage', 'overloaded'
     ],
     'features_added': ['building_code', 'floor', 'lat', 'lng', 'predicted_signal_db'],
-    'description': '只使用推理时可获得特征的分类器，移除虚假默认值',
+    'description': 'Classifier using only inference-available features, removed fake defaults',
 }
 meta_path = os.path.join(MODEL_DIR, 'decision_tree_meta_v3.json')
 with open(meta_path, 'w') as f:

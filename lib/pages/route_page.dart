@@ -311,8 +311,8 @@ class _RoutePageState extends State<RoutePage> {
                 keepAlive: true,
                 cameraConstraint: CameraConstraint.contain(
                   bounds: LatLngBounds(
-                    const LatLng(41.47, 2.07),  // 西南角
-                    const LatLng(41.54, 2.14),  // 东北角
+                    const LatLng(41.47, 2.07),  // Southwest corner
+                    const LatLng(41.54, 2.14),  // Northeast corner
                   ),
                 ),
                 onPositionChanged: (position, bool hasGesture) {

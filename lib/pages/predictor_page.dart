@@ -15,7 +15,7 @@ class _PredictorPageState extends State<PredictorPage> {
   final ApiService _apiService = ApiService();
   final _formKey = GlobalKey<FormState>();
 
-  // v3: 只使用推理时可获得的特征
+  // v3: only use features available at inference time
   final _apNameController = TextEditingController();
   final _hourController = TextEditingController();
 
@@ -227,12 +227,12 @@ class _PredictorPageState extends State<PredictorPage> {
               if (hasAp || _showManualForm) ...[
                 const SizedBox(height: 16),
                 const Text(
-                  'v3 Predictor - 只使用真实可用特征',
+                  'v3 Predictor - Only real available features',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  '已移除 client_count, cpu_utilization 等虚假默认值',
+                  'Removed fake defaults like client_count, cpu_utilization',
                   style: TextStyle(fontSize: 12, color: Colors.grey),
                 ),
                 const SizedBox(height: 20),
@@ -276,17 +276,17 @@ class _PredictorPageState extends State<PredictorPage> {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  '其他特征 (day_of_week, is_weekend, month, day_of_month) 自动从系统时间获取',
+                  'Other features (day_of_week, is_weekend, month, day_of_month) auto from system time',
                   style: TextStyle(fontSize: 11, color: Colors.grey),
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'AP 静态特征 (building, floor, lat, lng) 自动从 GeoJSON 数据库获取',
+                  'AP static features (building, floor, lat, lng) auto from GeoJSON database',
                   style: TextStyle(fontSize: 11, color: Colors.grey),
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  '信号强度 (predicted_signal_db) 自动从信号模型级联预测',
+                  'Signal strength (predicted_signal_db) auto from signal model cascade',
                   style: TextStyle(fontSize: 11, color: Colors.grey),
                 ),
                 const SizedBox(height: 24),
@@ -358,7 +358,7 @@ class _PredictorPageState extends State<PredictorPage> {
                               const SizedBox(height: 8),
                               if (_predictionResult!['features_used'] != null) ...[
                                 const Text(
-                                  'Features Used (v3 - 全部真实可用):',
+                                  'Features Used (v3 - all real available):',
                                   style: TextStyle(fontWeight: FontWeight.bold),
                                 ),
                                 Text(

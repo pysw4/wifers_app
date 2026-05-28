@@ -3,7 +3,7 @@
 Wifers App - FastAPI Backend Server
 
 Provides REST API endpoints for:
-  - /predict: AP status prediction (Up/Down) - v3 model (真实可用特征)
+  - /predict: AP status prediction (Up/Down) - v3 model (real available features)
   - /predict/signal_strength/heatmap: Pre-computed signal strength heatmap
   - /predict/signal_strength/ap_trend: Daily signal trend for a specific AP
   - /recommend: AP recommendation based on location and preferences
@@ -589,8 +589,8 @@ async def server_status():
 @app.post("/predict")
 async def predict_ap_status(request: PredictRequestV3):
     """
-    v3 模型 - 只使用推理时可获得的特征
-    请求只需 ap_name + 时间特征，其余自动从 GeoJSON 和信号模型获取
+    v3 model - uses only features available at inference time
+    Request only needs ap_name + time features; rest is auto-filled from GeoJSON and signal model
     """
     try:
         model = _load_decision_tree_v3()
