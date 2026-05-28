@@ -35,10 +35,6 @@ class _BookingPageState extends State<BookingPage> {
   List<AlternativeRoom> _alternatives = [];
   bool _showAlternatives = false;
 
-  // Best slot suggestion
-  BestSlot? _bestSlot;
-  int _durationHours = 2;
-
   // Availability grid
   List<HourAvailability> _availabilityHours = [];
   bool _availabilityLoading = false;
@@ -252,48 +248,6 @@ class _BookingPageState extends State<BookingPage> {
       _showSnackBar('Failed to find alternatives: ${e.message}');
     } catch (e) {
       _showSnackBar('Failed to find alternatives: $e');
-    }
-  }
-
-  Future<void> _suggestSlot() async {
-    final roomCode = _roomCodeController.text.trim().toUpperCase();
-    final nStudents = int.tryParse(_nStudentsController.text.trim()) ?? 30;
-
-    setState(() {
-      _loading = true;
-      _status = 'Searching for best slot...';
-      _bestSlot = null;
-    });
-
-    try {
-      final resp = await _api.suggestBestSlot(
-        roomCode: roomCode,
-        date: _formatDate(_selectedDate),
-        durationHours: _durationHours,
-        nStudents: nStudents,
-      );
-
-      if (resp['found'] == true) {
-        final slot = BestSlot.fromJson(resp['slot'] as Map<String, dynamic>);
-        setState(() {
-          _bestSlot = slot;
-          _status =
-              'Best slot: ${slot.startHour}:00-${slot.endHour}:00 (${slot.performance})';
-        });
-      } else {
-        setState(() {
-          _bestSlot = null;
-          _status = 'No available slots found';
-        });
-      }
-    } on ApiException catch (e) {
-      _showSnackBar('Failed to suggest slot: ${e.message}');
-      setState(() => _status = 'Error: ${e.message}');
-    } catch (e) {
-      _showSnackBar('Failed to suggest slot: $e');
-      setState(() => _status = 'Error: $e');
-    } finally {
-      setState(() => _loading = false);
     }
   }
 
@@ -552,27 +506,8 @@ class _BookingPageState extends State<BookingPage> {
               },
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
 
-            // Check & Book button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _loading ? null : _checkAndBook,
-                icon: _loading
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.book_online),
-                label: Text(_loading ? 'Processing...' : 'Check & Book'),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  backgroundColor: Colors.indigo,
-                  foregroundColor: Colors.white,
-                ),
-              ),
-            ),
             // Availability grid
             if (_roomCodeController.text.trim().isNotEmpty)
               Padding(
@@ -690,75 +625,22 @@ class _BookingPageState extends State<BookingPage> {
 
             const SizedBox(height: 8),
 
-            // Suggest best slot section
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Not sure when to book?',
-                        style: TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 14)),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        const Text('Duration: ', style: TextStyle(fontSize: 13)),
-                        const SizedBox(width: 8),
-                        DropdownButton<int>(
-                          value: _durationHours,
-                          items: List.generate(6, (i) => i + 1)
-                              .map((h) => DropdownMenuItem(
-                                  value: h,
-                                  child: Text('$h hour${h > 1 ? 's' : ''}')))
-                              .toList(),
-                          onChanged: (v) {
-                            if (v != null) setState(() => _durationHours = v);
-                          },
-                        ),
-                        const Spacer(),
-                        TextButton.icon(
-                          onPressed: _loading ? null : _suggestSlot,
-                          icon: const Icon(Icons.auto_awesome, size: 18),
-                          label: const Text('Suggest'),
-                        ),
-                      ],
-                    ),
-                    if (_bestSlot != null)
-                      Container(
-                        margin: const EdgeInsets.only(top: 8),
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.green[50],
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.green[200]!),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(Icons.check_circle,
-                                color: Colors.green[700], size: 18),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Best: ${_bestSlot!.startHour}:00-${_bestSlot!.endHour}:00 (${_bestSlot!.performance})',
-                                style: TextStyle(
-                                    color: Colors.green[800],
-                                    fontWeight: FontWeight.w500),
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: () {
-                                setState(() {
-                                  _startHour = _bestSlot!.startHour;
-                                  _endHour = _bestSlot!.endHour;
-                                });
-                              },
-                              child: const Text('Use'),
-                            ),
-                          ],
-                        ),
-                      ),
-                  ],
+            // Check & Book button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _loading ? null : _checkAndBook,
+                icon: _loading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.book_online),
+                label: Text(_loading ? 'Processing...' : 'Check & Book'),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  backgroundColor: Colors.indigo,
+                  foregroundColor: Colors.white,
                 ),
               ),
             ),
