@@ -271,7 +271,7 @@ class _BookingPageState extends State<BookingPage> {
     try {
       await _api.cancelBooking(bookingId);
       _showSnackBar('Booking cancelled');
-      _loadMyBookings();
+      await _loadMyBookings();
     } on ApiException catch (e) {
       _showSnackBar('Failed to cancel: ${e.message}');
     } catch (e) {
