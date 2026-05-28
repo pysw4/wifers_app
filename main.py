@@ -27,6 +27,7 @@ from typing import Any, Optional
 
 import joblib
 from foto2ap_service import recognize_ap
+import numpy as np
 import pandas as pd
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
@@ -56,6 +57,7 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, 
 _decision_tree_v3: Any = None
 _decision_tree_v3_meta: Optional[dict] = None
 _building_encoder: Any = None
+_ap_name_encoder: Any = None
 _signal_strength_model: Any = None
 _signal_strength_meta: Any = None
 _geojson_data: Optional[dict] = None
@@ -74,6 +76,51 @@ PERF_RANK = {'Critical': 0, 'Poor': 1, 'Fair': 2, 'Good': 3,
 
 # --- Prediction feedback / accuracy tracking ---
 _prediction_feedback: list[dict] = []  # Stores {ap_name, hour, predicted, actual, timestamp}
+
+# --- Actual signal data from clientes_processed.csv for accuracy comparison ---
+_actual_signal_data: dict[str, dict] = {}  # {ap_name_lower: {hourly: {hour: {actual_mean, samples}}, total_measurements}}
+_actual_signal_loaded: bool = False
+
+def _load_actual_signal_data():
+    """Load actual signal measurements from clientes_processed.csv and aggregate by AP + hour."""
+    global _actual_signal_data, _actual_signal_loaded
+    if _actual_signal_loaded:
+        return _actual_signal_data
+    
+    csv_path = BASE_DIR / "clientes_processed.csv"
+    if not csv_path.exists():
+        print(f"[WARN] Actual signal data file not found: {csv_path}")
+        _actual_signal_loaded = True
+        return _actual_signal_data
+    
+    try:
+        print(f"[INFO] Loading actual signal data from {csv_path}...")
+        cli = pd.read_csv(csv_path, nrows=500000)
+        print(f"[INFO] Loaded {len(cli)} client samples")
+        
+        for ap_name in cli['associated_device_name'].unique():
+            ap_data = cli[cli['associated_device_name'] == ap_name]
+            if len(ap_data) < 5:
+                continue
+            # Aggregate by hour: mean signal_db and sample count
+            hourly = ap_data.groupby('hour')['signal_db'].agg(['mean', 'count'])
+            hourly_dict = {}
+            for h, row in hourly.iterrows():
+                hourly_dict[int(h)] = {
+                    "actual_mean": round(float(row['mean']), 1),
+                    "samples": int(row['count']),
+                }
+            _actual_signal_data[ap_name.strip().lower()] = {
+                "hourly": hourly_dict,
+                "total_measurements": len(ap_data),
+            }
+        
+        print(f"[INFO] Loaded actual signal data for {len(_actual_signal_data)} APs")
+        _actual_signal_loaded = True
+    except Exception as e:
+        print(f"[ERROR] Failed to load actual signal data: {e}")
+    
+    return _actual_signal_data
 
 
 
@@ -103,6 +150,34 @@ def _load_building_encoder():
         if path.exists():
             _building_encoder = joblib.load(path)
     return _building_encoder
+
+
+def _load_ap_name_encoder():
+    global _ap_name_encoder
+    if _ap_name_encoder is None:
+        path = MODELS_DIR / "ap_name_encoder.joblib"
+        if path.exists():
+            _ap_name_encoder = joblib.load(path)
+    return _ap_name_encoder
+
+
+def _encode_ap_name(ap_name: str) -> int:
+    """Encode AP name using the label encoder. Returns 0 if not found."""
+    encoder = _load_ap_name_encoder()
+    if encoder is None:
+        return 0
+    # Try exact match first, then stripped
+    clean_name = ap_name.strip()
+    if clean_name in encoder.classes_:
+        return int(encoder.transform([clean_name])[0])
+    # Try with leading space (some encoder classes have leading spaces)
+    if f" {clean_name}" in encoder.classes_:
+        return int(encoder.transform([f" {clean_name}"])[0])
+    # Try case-insensitive
+    for cls in encoder.classes_:
+        if cls.strip().lower() == clean_name.lower():
+            return int(encoder.transform([cls])[0])
+    return 0
 
 
 def _load_signal_strength_model():
@@ -261,8 +336,8 @@ def _approximate_distance(lat1: float, lng1: float, lat2: float, lng2: float) ->
     return math.sqrt(lat_diff ** 2 + lng_diff ** 2)
 
 
-def _build_signal_features(building_code: int, floor: float, hour: float, day_of_week: float, is_weekend: float, day_of_month: float, month: float) -> dict:
-    return {"building_code": building_code, "floor": floor, "hour": hour, "band": 5.0, "day_of_week": day_of_week, "is_weekend": is_weekend, "day_of_month": day_of_month, "month": month}
+def _build_signal_features(building_code: int, floor: float, hour: float, day_of_week: float, is_weekend: float, day_of_month: float, month: float, ap_name_code: int = 0) -> dict:
+    return {"building_code": building_code, "floor": floor, "hour": hour, "band": 5.0, "day_of_week": day_of_week, "is_weekend": is_weekend, "day_of_month": day_of_month, "month": month, "ap_name_code": ap_name_code}
 
 
 def _build_v3_decision_features(hour: float, day_of_week: float, is_weekend: float, day_of_month: float, month: float, building_code: int, floor: float, lat: float, lng: float, predicted_signal_db: float) -> list[list[float]]:
@@ -281,7 +356,8 @@ def _find_ap_in_index(ap_name: str) -> Optional[dict]:
 def _predict_signal_for_ap(ap_entry: dict, hour: float, day_of_week: float, is_weekend: float, day_of_month: float, month: float) -> float:
     model = _load_signal_strength_model()
     building_code = _encode_building(ap_entry["building"])
-    features = _build_signal_features(building_code=building_code, floor=ap_entry["floor"], hour=hour, day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=day_of_month, month=month)
+    ap_name_code = _encode_ap_name(ap_entry["name"])
+    features = _build_signal_features(building_code=building_code, floor=ap_entry["floor"], hour=hour, day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=day_of_month, month=month, ap_name_code=ap_name_code)
     df = pd.DataFrame([features])
     return float(model.predict(df)[0])
 
@@ -358,6 +434,7 @@ def _predict_booking_performance(room_code: str, date_str: str, start_hour: int,
     month = float(booking_date.month)
 
     building_code = _encode_building(ap_entry["building"])
+    ap_name_code = _encode_ap_name(ap_entry["name"])
     hours = list(range(start_hour, end_hour))
 
     predictions = []
@@ -365,7 +442,8 @@ def _predict_booking_performance(room_code: str, date_str: str, start_hour: int,
         features = _build_signal_features(
             building_code=building_code, floor=ap_entry["floor"],
             hour=float(h), day_of_week=day_of_week,
-            is_weekend=is_weekend, day_of_month=day_of_month, month=month
+            is_weekend=is_weekend, day_of_month=day_of_month, month=month,
+            ap_name_code=ap_name_code
         )
         df = pd.DataFrame([features])
         signal_db = float(signal_model.predict(df)[0])
@@ -643,6 +721,57 @@ async def get_ap_daily_trend(ap_name: str):
                 sum(1 for f in down_feedback if f["predicted"] == "Down") / len(down_feedback), 3
             )
 
+    # Calculate accuracy vs actual measurements from clientes_processed.csv
+    actual_data = _load_actual_signal_data().get(cache_key, {})
+    accuracy_vs_actual = None
+    if actual_data and actual_data.get("hourly"):
+        hourly_actual = actual_data["hourly"]
+        diffs = []
+        actual_hourly_list = []
+        for h_data in hourly_data:
+            h = h_data["hour"]
+            if h in hourly_actual:
+                pred_db = h_data["signal_db"]
+                actual_db = hourly_actual[h]["actual_mean"]
+                diff = abs(pred_db - actual_db)
+                diffs.append(diff)
+                actual_hourly_list.append({
+                    "hour": h,
+                    "actual_mean": actual_db,
+                    "samples": hourly_actual[h]["samples"],
+                    "predicted_db": pred_db,
+                    "diff": round(diff, 1),
+                })
+        
+        if diffs:
+            mae = sum(diffs) / len(diffs)
+            within_5db = sum(1 for d in diffs if d <= 5)
+            within_10db = sum(1 for d in diffs if d <= 10)
+            signal_accuracy = within_5db / len(diffs)
+            
+            # Also compute status accuracy (Up/Down based on -75 threshold)
+            status_correct = 0
+            status_total = 0
+            for h_data in hourly_data:
+                h = h_data["hour"]
+                if h in hourly_actual:
+                    pred_status = _dbm_to_status(h_data["signal_db"])
+                    actual_status = _dbm_to_status(hourly_actual[h]["actual_mean"])
+                    if pred_status == actual_status:
+                        status_correct += 1
+                    status_total += 1
+            
+            accuracy_vs_actual = {
+                "mae": round(mae, 1),
+                "signal_accuracy": round(signal_accuracy, 3),
+                "within_5db": within_5db,
+                "within_10db": within_10db,
+                "compared_hours": len(diffs),
+                "total_measurements": actual_data["total_measurements"],
+                "status_accuracy": round(status_correct / status_total, 3) if status_total > 0 else None,
+                "hourly": actual_hourly_list,
+            }
+
     result = {
         "ap_name": ap_name,
         "building": building,
@@ -659,6 +788,7 @@ async def get_ap_daily_trend(ap_name: str):
             "worst_hour": worst_hour,
         },
         "accuracy": accuracy_stats,
+        "accuracy_vs_actual": accuracy_vs_actual,
     }
     _trend_cache[cache_key] = result
     _trend_cache_time[cache_key] = now
@@ -730,8 +860,111 @@ async def get_prediction_stats(ap_name: str):
     }
 
 
-@app.get("/predict/signal_strength/ap_trend/{ap_name:path}/compare")
+@app.get("/predict/signal_strength/accuracy/{ap_name:path}")
+async def get_ap_signal_accuracy(ap_name: str):
+    """Get detailed prediction vs actual signal accuracy for a specific AP."""
+    cache_key = ap_name.strip().lower()
+    
+    # Load actual data
+    actual_data = _load_actual_signal_data().get(cache_key, {})
+    if not actual_data or not actual_data.get("hourly"):
+        return {
+            "ap_name": ap_name,
+            "has_data": False,
+            "message": "No actual measurement data available for this AP.",
+        }
+    
+    # Get predicted trend
+    try:
+        model = _load_signal_strength_model()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    
+    ap_entry = _find_ap_in_index(ap_name)
+    if ap_entry is None:
+        return {
+            "ap_name": ap_name,
+            "has_data": False,
+            "message": "AP not found in GeoJSON database.",
+        }
+    
+    building_code = _encode_building(ap_entry["building"])
+    rows = []
+    for hour in range(24):
+        rows.append(_build_signal_features(
+            building_code=building_code, floor=ap_entry["floor"],
+            hour=float(hour), day_of_week=0.0, is_weekend=0.0,
+            day_of_month=15.0, month=4.0
+        ))
+    df = pd.DataFrame(rows)
+    predictions = model.predict(df)
+    
+    hourly_actual = actual_data["hourly"]
+    comparison = []
+    diffs = []
+    status_correct = 0
+    status_total = 0
+    
+    for hour in range(24):
+        pred_db = round(float(predictions[hour]), 1)
+        pred_status = _dbm_to_status(pred_db)
+        pred_quality = _dbm_to_quality(pred_db)["quality"]
+        
+        entry = {
+            "hour": hour,
+            "predicted_db": pred_db,
+            "predicted_status": pred_status,
+            "predicted_quality": pred_quality,
+        }
+        
+        if hour in hourly_actual:
+            actual_db = hourly_actual[hour]["actual_mean"]
+            actual_status = _dbm_to_status(actual_db)
+            actual_quality = _dbm_to_quality(actual_db)["quality"]
+            diff = abs(pred_db - actual_db)
+            diffs.append(diff)
+            
+            if pred_status == actual_status:
+                status_correct += 1
+            status_total += 1
+            
+            entry["actual_db"] = actual_db
+            entry["actual_status"] = actual_status
+            entry["actual_quality"] = actual_quality
+            entry["actual_samples"] = hourly_actual[hour]["samples"]
+            entry["diff"] = round(diff, 1)
+        else:
+            entry["actual_db"] = None
+            entry["diff"] = None
+        
+        comparison.append(entry)
+    
+    # Calculate metrics
+    mae = sum(diffs) / len(diffs) if diffs else None
+    within_5db = sum(1 for d in diffs if d <= 5) if diffs else 0
+    within_10db = sum(1 for d in diffs if d <= 10) if diffs else 0
+    signal_accuracy = within_5db / len(diffs) if diffs else None
+    status_accuracy = status_correct / status_total if status_total > 0 else None
+    
+    return {
+        "ap_name": ap_name,
+        "building": ap_entry["building"],
+        "floor": int(ap_entry["floor"]),
+        "has_data": True,
+        "total_measurements": actual_data["total_measurements"],
+        "compared_hours": len(diffs),
+        "metrics": {
+            "mae": round(mae, 1) if mae else None,
+            "signal_accuracy": round(signal_accuracy, 3) if signal_accuracy else None,
+            "within_5db": within_5db,
+            "within_10db": within_10db,
+            "status_accuracy": round(status_accuracy, 3) if status_accuracy else None,
+        },
+        "hourly_comparison": comparison,
+    }
 
+
+@app.get("/predict/signal_strength/ap_trend/{ap_name:path}/compare")
 async def get_ap_trend_compare(ap_name: str):
     try:
         model = _load_signal_strength_model()
@@ -789,7 +1022,8 @@ async def recommend_aps(request: RecommendRequest):
     signal_rows = []
     for ap in nearby_aps:
         building_code = _encode_building(ap["building"])
-        signal_rows.append(_build_signal_features(building_code=building_code, floor=ap["floor"], hour=current_hour, day_of_week=current_day, is_weekend=is_weekend, day_of_month=current_day_of_month, month=current_month))
+        ap_name_code = _encode_ap_name(ap["name"])
+        signal_rows.append(_build_signal_features(building_code=building_code, floor=ap["floor"], hour=current_hour, day_of_week=current_day, is_weekend=is_weekend, day_of_month=current_day_of_month, month=current_month, ap_name_code=ap_name_code))
     signal_df = pd.DataFrame(signal_rows)
     signal_predictions = signal_model.predict(signal_df)
     decision_rows = []
