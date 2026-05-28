@@ -225,6 +225,10 @@ class BookingPageState extends State<BookingPage> {
       });
 
       _showSuccessDialog(booking);
+      // Auto-refresh My Bookings
+      if (_showMyBookings) {
+        await loadMyBookings();
+      }
     } on ApiException catch (e) {
       if (e.statusCode == 409) {
         _showSnackBar('Room already booked for this time slot');
