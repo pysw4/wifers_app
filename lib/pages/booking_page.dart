@@ -233,8 +233,10 @@ class BookingPageState extends State<BookingPage> {
           .map((h) => HourAvailability.fromJson(h as Map<String, dynamic>))
           .toList();
       setState(() => _availabilityHours = hours);
+    } on ApiException catch (e) {
+      _showSnackBar('Failed to load availability: ${e.message}');
     } catch (e) {
-      // Silently fail – availability is non-critical
+      _showSnackBar('Failed to load availability: $e');
     } finally {
       setState(() => _availabilityLoading = false);
     }
