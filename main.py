@@ -382,12 +382,9 @@ def _get_ap_from_room(room_code: str) -> Optional[dict]:
 
 
 def _check_booking_availability(bookings: list, room_code: str, date_str: str, start_hour: int, end_hour: int) -> tuple[bool, Optional[dict]]:
-    ap_info = _get_ap_from_room(room_code)
-    if ap_info is None:
-        return False, None
-    ap_name = ap_info["ap_name"]
+    room_code_upper = room_code.strip().upper()
     for book in bookings:
-        if book["ap_name"] != ap_name or book["date"] != date_str:
+        if book["room_code"] != room_code_upper or book["date"] != date_str:
             continue
         if not (end_hour <= book["start_hour"] or start_hour >= book["end_hour"]):
             return False, book
@@ -1364,11 +1361,11 @@ async def booking_availability(room_code: str, date: str):
     if ap_info is None:
         raise HTTPException(status_code=404, detail=f"Room '{room_code}' not found")
 
-    ap_name = ap_info["ap_name"]
+    room_code_upper = room_code.strip().upper()
     booked_ranges = [
         (b["start_hour"], b["end_hour"])
         for b in _bookings
-        if b["ap_name"] == ap_name and b["date"] == date
+        if b["room_code"] == room_code_upper and b["date"] == date
     ]
 
     def is_booked(h):
@@ -1382,8 +1379,8 @@ async def booking_availability(room_code: str, date: str):
         })
 
     return {
-        "room_code": room_code.strip().upper(),
-        "ap_name": ap_name,
+        "room_code": room_code_upper,
+        "ap_name": ap_info["ap_name"],
         "date": date,
         "hours": hours,
     }
