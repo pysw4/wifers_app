@@ -150,12 +150,18 @@ for dow_idx, day_name in enumerate(DAY_NAMES):
         df = pd.DataFrame(rows)
         predictions = signal_model.predict(df)
         
-        # Add small random noise (±2 dBm) so APs in the same building/floor
-        # don't all get identical signal values. This makes the heatmap
+        # Add per-AP offset so each AP has a unique signal value.
+        # The model only uses building_code + floor, so APs in the same
+        # building/floor get identical predictions. We use the AP name
+        # as a seed to generate a fixed offset per AP, making the heatmap
         # visually more realistic and varied.
-        rng = np.random.default_rng(seed=(dow_idx * 100 + hour))
-        noise = rng.uniform(-2.0, 2.0, size=len(predictions))
-        predictions = predictions + noise
+        ap_offsets = []
+        for ap in ap_points_base:
+            # Deterministic offset based on AP name hash, range ±3 dBm
+            name_hash = hash(ap['ap_name']) & 0xFFFF
+            offset = (name_hash / 65535.0) * 6.0 - 3.0
+            ap_offsets.append(offset)
+        predictions = predictions + np.array(ap_offsets)
         
         # Write predictions back to ap_points_base
         key = f'{day_name}_h{hour}'
