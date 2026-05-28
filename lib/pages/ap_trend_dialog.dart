@@ -43,6 +43,17 @@ class _APTrendDialogState extends State<APTrendDialog> {
 
   static const Set<String> _weekendDays = {'sat', 'sun'};
 
+  /// Compute day label from current date
+  String _getCurrentDayLabel() {
+    final now = DateTime.now();
+    // DateTime weekday: 1=Mon ... 7=Sun
+    final dayNames = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+    final dayName = dayNames[now.weekday - 1];
+    final label = _dayLabels[dayName] ?? 'Weekday';
+    final isWeekend = _weekendDays.contains(dayName);
+    return '$label (${isWeekend ? 'Weekend' : 'Weekday'})';
+  }
+
   String _formatDayType(String dayName) {
     final label = _dayLabels[dayName] ?? 'Weekday';
     final isWeekend = _weekendDays.contains(dayName);
@@ -63,9 +74,11 @@ class _APTrendDialogState extends State<APTrendDialog> {
           .toList();
       setState(() {
         _trendData = trend;
-        final rawDayType = data['day_type'] as String? ?? 'weekday';
-        _dayType = rawDayType;
-        _dayLabel = _formatDayType(rawDayType);
+        // Use current date to determine day type and label
+        final now = DateTime.now();
+        final isWeekend = now.weekday == DateTime.saturday || now.weekday == DateTime.sunday;
+        _dayType = isWeekend ? 'weekend' : 'weekday';
+        _dayLabel = _getCurrentDayLabel();
         _stats = data['stats'] as Map<String, dynamic>? ?? {};
         _accuracy = data['accuracy'] as Map<String, dynamic>? ?? {};
         _accuracyVsActual = data['accuracy_vs_actual'] as Map<String, dynamic>?;

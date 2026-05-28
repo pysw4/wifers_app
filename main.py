@@ -788,9 +788,19 @@ async def get_ap_daily_trend(ap_name: str):
     building = ap_entry["building"]
     floor = ap_entry["floor"]
     building_code = _encode_building(building)
+    
+    # Use current date for trend prediction
+    today = datetime.now()
+    day_of_week = float(today.weekday())  # 0=Mon, 6=Sun
+    is_weekend = 1.0 if day_of_week >= 5 else 0.0
+    day_of_month = float(today.day)
+    month = float(today.month)
+    day_name = DAY_NAMES[int(day_of_week)]  # e.g. 'mon', 'tue', ..., 'sun'
+    day_type = "weekend" if is_weekend else "weekday"
+    
     rows = []
     for hour in range(24):
-        rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=0.0, is_weekend=0.0, day_of_month=15.0, month=4.0))
+        rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=day_of_month, month=month))
     df = pd.DataFrame(rows)
     predictions = model.predict(df)
     hourly_data = []
@@ -846,8 +856,8 @@ async def get_ap_daily_trend(ap_name: str):
         # --- Interpolate missing hours to get a full 24-hour curve ---
         # Build a complete 0..23 array, filling gaps with linear interpolation
         full_actual = {}
-        # Convert string keys to int for comparison
-        actual_hours = sorted(int(k) for k in hourly_actual.keys())
+        # hourly_actual keys are already int (converted in _load_actual_signal_data)
+        actual_hours = sorted(hourly_actual.keys())
         
         if len(actual_hours) >= 2:
             # Interpolate between known points
@@ -866,8 +876,8 @@ async def get_ap_daily_trend(ap_name: str):
                     if before and after:
                         h_before = before[-1]
                         h_after = after[0]
-                        v_before = hourly_actual[str(h_before)]["actual_mean"]
-                        v_after = hourly_actual[str(h_after)]["actual_mean"]
+                        v_before = hourly_actual[h_before]["actual_mean"]
+                        v_after = hourly_actual[h_after]["actual_mean"]
                         # Linear interpolation
                         ratio = (h - h_before) / (h_after - h_before)
                         interpolated = v_before + (v_after - v_before) * ratio
@@ -879,29 +889,29 @@ async def get_ap_daily_trend(ap_name: str):
                     elif before and not after:
                         # Extrapolate from last known value (flat)
                         full_actual[h] = {
-                            "actual_mean": hourly_actual[str(before[-1])]["actual_mean"],
+                            "actual_mean": hourly_actual[before[-1]]["actual_mean"],
                             "samples": 0,
                             "interpolated": True,
                         }
                     elif after and not before:
                         # Extrapolate from first known value (flat)
                         full_actual[h] = {
-                            "actual_mean": hourly_actual[str(after[0])]["actual_mean"],
+                            "actual_mean": hourly_actual[after[0]]["actual_mean"],
                             "samples": 0,
                             "interpolated": True,
                         }
         elif len(actual_hours) == 1:
             # Only one hour known — use it for all hours
             single_h = actual_hours[0]
-            single_v = hourly_actual[str(single_h)]["actual_mean"]
+            single_v = hourly_actual[single_h]["actual_mean"]
             for h in range(24):
                 full_actual[h] = {
                     "actual_mean": single_v,
-                    "samples": hourly_actual[str(single_h)]["samples"] if h == single_h else 0,
+                    "samples": hourly_actual[single_h]["samples"] if h == single_h else 0,
                     "interpolated": h != single_h,
                 }
         else:
-            full_actual = {int(k): v for k, v in hourly_actual.items()}
+            full_actual = {k: v for k, v in hourly_actual.items()}
         
         # Now build comparison using the full 24-hour actual data
         diffs = []
@@ -958,7 +968,8 @@ async def get_ap_daily_trend(ap_name: str):
         "lat": ap_entry["lat"],
         "lng": ap_entry["lng"],
         "trend": hourly_data,
-        "day_type": "weekday",
+        "day_type": day_type,
+        "day_name": day_name,
         "stats": {
             "avg_db": round(avg_db, 1),
             "max_db": round(max_db, 1),
