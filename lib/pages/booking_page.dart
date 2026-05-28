@@ -7,10 +7,10 @@ class BookingPage extends StatefulWidget {
 
   const BookingPage({super.key, this.showAppBar = true});
   @override
-  State<BookingPage> createState() => _BookingPageState();
+  BookingPageState createState() => BookingPageState();
 }
 
-class _BookingPageState extends State<BookingPage> {
+class BookingPageState extends State<BookingPage> {
   final _api = ApiService();
   final _teacherIdController = TextEditingController();
   final _roomCodeController = TextEditingController();
@@ -64,7 +64,7 @@ class _BookingPageState extends State<BookingPage> {
   String _formatDate(DateTime d) =>
       '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
-  Future<void> _loadMyBookings() async {
+  Future<void> loadMyBookings() async {
     final tid = _teacherIdController.text.trim();
     if (tid.isEmpty) {
       _showSnackBar('Please enter a Teacher ID first');
@@ -271,7 +271,7 @@ class _BookingPageState extends State<BookingPage> {
     try {
       await _api.cancelBooking(bookingId);
       _showSnackBar('Booking cancelled');
-      await _loadMyBookings();
+      await loadMyBookings();
     } on ApiException catch (e) {
       _showSnackBar('Failed to cancel: ${e.message}');
     } catch (e) {
@@ -377,7 +377,7 @@ class _BookingPageState extends State<BookingPage> {
                   icon: Icon(
                       _showMyBookings ? Icons.list : Icons.person_search),
                   tooltip: 'My Bookings',
-                  onPressed: _myBookingsLoading ? null : _loadMyBookings,
+                  onPressed: _myBookingsLoading ? null : loadMyBookings,
                 ),
               ],
             )

@@ -20,6 +20,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   // Global keys to access child states
   final _recommendPageKey = GlobalKey<RecommendPageState>();
+  final _bookingPageKey = GlobalKey<BookingPageState>();
 
   // Page title list
   static const List<String> _titles = [
@@ -47,6 +48,13 @@ class _MyHomePageState extends State<MyHomePage> {
               );
             },
           ),
+          if (currentIndex == 3)
+            IconButton(
+              icon: const Icon(Icons.person_search),
+              tooltip: 'My Bookings',
+              onPressed: () =>
+                  _bookingPageKey.currentState?.loadMyBookings(),
+            ),
           if (currentIndex == 0)
             IconButton(
               icon: const Icon(Icons.favorite),
@@ -73,7 +81,7 @@ class _MyHomePageState extends State<MyHomePage> {
             },
           ),
           RecommendPage(key: _recommendPageKey),
-          const BookingPage(showAppBar: false),
+          BookingPage(key: _bookingPageKey, showAppBar: false),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
