@@ -423,29 +423,73 @@ class BookingPageState extends State<BookingPage> {
             ),
             const SizedBox(height: 12),
 
-            // Room code
-            DropdownButtonFormField<String>(
-              value: _selectedRoomCode,
-              decoration: const InputDecoration(
-                labelText: 'Room Code',
-                prefixIcon: Icon(Icons.meeting_room),
-                border: OutlineInputBorder(),
+            // Room code (autocomplete with fuzzy search)
+            if (_roomCodesLoading)
+              const TextField(
+                enabled: false,
+                decoration: InputDecoration(
+                  labelText: 'Room Code',
+                  prefixIcon: Icon(Icons.meeting_room),
+                  border: OutlineInputBorder(),
+                  hintText: 'Loading rooms...',
+                ),
+              )
+            else
+              Autocomplete<String>(
+                optionsBuilder: (textEditingValue) {
+                  if (textEditingValue.text.isEmpty) return [];
+                  final query = textEditingValue.text.toUpperCase();
+                  return _roomCodes.where((c) =>
+                      c.toUpperCase().contains(query));
+                },
+                onSelected: (selection) {
+                  setState(() {
+                    _selectedRoomCode = selection;
+                    _availabilityHours = [];
+                  });
+                },
+                fieldViewBuilder: (context, controller, focusNode, onSubmit) {
+                  return TextField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    decoration: const InputDecoration(
+                      labelText: 'Room Code',
+                      hintText: 'Type to search rooms...',
+                      prefixIcon: Icon(Icons.meeting_room),
+                      border: OutlineInputBorder(),
+                    ),
+                    textCapitalization: TextCapitalization.characters,
+                    onChanged: (_) {
+                      setState(() => _availabilityHours = []);
+                    },
+                  );
+                },
+                optionsViewBuilder: (context, onSelected, options) {
+                  return Align(
+                    alignment: Alignment.topLeft,
+                    child: Material(
+                      elevation: 4,
+                      borderRadius: BorderRadius.circular(8),
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 200),
+                        child: ListView.builder(
+                          padding: EdgeInsets.zero,
+                          shrinkWrap: true,
+                          itemCount: options.length,
+                          itemBuilder: (context, index) {
+                            final option = options.elementAt(index);
+                            return ListTile(
+                              dense: true,
+                              title: Text(option),
+                              onTap: () => onSelected(option),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
-              isExpanded: true,
-              hint: const Text('Select a room'),
-              items: _roomCodesLoading
-                  ? [const DropdownMenuItem(value: null, child: Text('Loading rooms...'))]
-                  : _roomCodes.map((c) => DropdownMenuItem(
-                      value: c,
-                      child: Text(c, overflow: TextOverflow.ellipsis),
-                    )).toList(),
-              onChanged: (v) {
-                setState(() {
-                  _selectedRoomCode = v;
-                  _availabilityHours = [];
-                });
-              },
-            ),
             const SizedBox(height: 12),
 
             // Date picker
