@@ -1163,6 +1163,9 @@ async def booking_create(request: BookingCreateRequest):
     if request.end_hour <= request.start_hour:
         raise HTTPException(status_code=400, detail="End time must be after start time")
 
+    if not request.room_code:
+        return {"success": False, "message": "Room code is required", "booking": None}
+
     ap_info = _get_ap_from_room(request.room_code)
     if ap_info is None:
         raise HTTPException(status_code=404, detail=f"Room '{request.room_code}' not found")
@@ -1220,6 +1223,9 @@ async def booking_predict(request: BookingPredictRequest):
     """Predict performance for a room/time slot without creating a booking."""
     if request.end_hour <= request.start_hour:
         raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    if not request.room_code:
+        return {"available": False, "prediction": {"performance": None, "warning": "Room code is required"}}
 
     ap_info = _get_ap_from_room(request.room_code)
     if ap_info is None:
@@ -1283,6 +1289,9 @@ async def booking_list(teacher_id: Optional[str] = Query(default=None, descripti
 @app.post("/booking/suggest-slot")
 async def booking_suggest_slot(request: BookingSuggestSlotRequest):
     """Suggest the best available time slot for a room and duration."""
+    if not request.room_code:
+        return {"found": False, "message": "Room code is required"}
+
     ap_info = _get_ap_from_room(request.room_code)
     if ap_info is None:
         raise HTTPException(status_code=404, detail=f"Room '{request.room_code}' not found")
@@ -1306,6 +1315,9 @@ async def booking_alternatives(request: BookingAlternativesRequest):
     """Find alternative rooms on the same floor with better performance."""
     if request.end_hour <= request.start_hour:
         raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    if not request.room_code:
+        return {"room_code": None, "alternatives": [], "total": 0}
 
     ap_info = _get_ap_from_room(request.room_code)
     if ap_info is None:
