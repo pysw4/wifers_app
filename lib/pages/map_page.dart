@@ -129,9 +129,9 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
-  /// Show a bottom sheet to choose camera or gallery.
+  /// Show a bottom sheet to choose camera, gallery, or manual input.
   Future<void> _showFoto2ApSourcePicker() async {
-    final source = await showModalBottomSheet<ImageSource>(
+    final action = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
         child: Padding(
@@ -140,7 +140,7 @@ class _MapPageState extends State<MapPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                'Recognise AP from Photo',
+                'Find AP Location',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
@@ -148,13 +148,20 @@ class _MapPageState extends State<MapPage> {
                 leading: const Icon(Icons.camera_alt, color: Colors.blue),
                 title: const Text('Take a Photo'),
                 subtitle: const Text('Use camera to capture AP label'),
-                onTap: () => Navigator.pop(context, ImageSource.camera),
+                onTap: () => Navigator.pop(context, 'camera'),
               ),
               ListTile(
                 leading: const Icon(Icons.photo_library, color: Colors.green),
                 title: const Text('Choose from Gallery'),
                 subtitle: const Text('Select an existing photo'),
-                onTap: () => Navigator.pop(context, ImageSource.gallery),
+                onTap: () => Navigator.pop(context, 'gallery'),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.edit, color: Colors.orange),
+                title: const Text('Manually enter AP name'),
+                subtitle: const Text('Type the AP name to locate it'),
+                onTap: () => Navigator.pop(context, 'manual'),
               ),
             ],
           ),
@@ -162,8 +169,12 @@ class _MapPageState extends State<MapPage> {
       ),
     );
 
-    if (source != null) {
-      _startFoto2Ap(source);
+    if (action == 'camera') {
+      _startFoto2Ap(ImageSource.camera);
+    } else if (action == 'gallery') {
+      _startFoto2Ap(ImageSource.gallery);
+    } else if (action == 'manual') {
+      _showManualApInputDialog();
     }
   }
 
@@ -174,6 +185,190 @@ class _MapPageState extends State<MapPage> {
       _foto2ApResult = null;
     });
     _loadHeatmap();
+  }
+
+  /// Look up an AP by name (case-insensitive) in the loaded [_aps] list.
+  APInfo? _lookupApByName(String query) {
+    final q = query.trim().toUpperCase();
+    for (final ap in _aps) {
+      if (ap.name?.toUpperCase() == q) return ap;
+    }
+    return null;
+  }
+
+  /// Show a dialog to manually enter an AP name, with autocomplete suggestions.
+  Future<void> _showManualApInputDialog() async {
+    final controller = TextEditingController();
+    final focusNode = FocusNode();
+    String selectedName = '';
+    List<APInfo> suggestions = [];
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            // Filter suggestions based on input
+            void updateSuggestions(String input) {
+              final q = input.trim().toUpperCase();
+              if (q.isEmpty) {
+                setDialogState(() => suggestions = []);
+                return;
+              }
+              setDialogState(() {
+                suggestions = _aps.where((ap) {
+                  final name = ap.name?.toUpperCase() ?? '';
+                  return name.contains(q);
+                }).take(20).toList();
+              });
+            }
+
+            return AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.edit, color: Colors.orange, size: 22),
+                  SizedBox(width: 8),
+                  Text('Enter AP Name', style: TextStyle(fontSize: 17)),
+                ],
+              ),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        hintText: 'e.g. AP-ETSE58',
+                        prefixIcon: const Icon(Icons.search, size: 20),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
+                      ),
+                      textInputAction: TextInputAction.search,
+                      onChanged: (value) {
+                        selectedName = value;
+                        updateSuggestions(value);
+                      },
+                      onSubmitted: (value) {
+                        selectedName = value;
+                        // Try to find and submit
+                        final ap = _lookupApByName(value);
+                        if (ap != null) {
+                          Navigator.pop(dialogContext);
+                          _applyManualApResult(ap);
+                        }
+                      },
+                    ),
+                    if (suggestions.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      const Divider(height: 1),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Suggestions (${suggestions.length}):',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      SizedBox(
+                        height: (suggestions.length * 44).clamp(0, 220).toDouble(),
+                        child: ListView.builder(
+                          itemCount: suggestions.length,
+                          itemBuilder: (context, index) {
+                            final ap = suggestions[index];
+                            return ListTile(
+                              dense: true,
+                              leading: const Icon(
+                                Icons.wifi,
+                                size: 18,
+                                color: Color(0xFF7C4DFF),
+                              ),
+                              title: Text(
+                                ap.name ?? '',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              subtitle: Text(
+                                '${ap.building} · Floor ${ap.height ?? '?'}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                              onTap: () {
+                                Navigator.pop(dialogContext);
+                                _applyManualApResult(ap);
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  onPressed: () {
+                    final ap = _lookupApByName(selectedName);
+                    if (ap != null) {
+                      Navigator.pop(dialogContext);
+                      _applyManualApResult(ap);
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('No AP found matching "$selectedName"'),
+                          backgroundColor: Colors.orange,
+                        ),
+                      );
+                    }
+                  },
+                  icon: const Icon(Icons.search, size: 18),
+                  label: const Text('Search'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    controller.dispose();
+    focusNode.dispose();
+  }
+
+  /// Apply a manually selected AP result: enter Foto2AP mode and show the marker.
+  void _applyManualApResult(APInfo ap) {
+    setState(() {
+      _isFoto2ApMode = true;
+      _heatmapCache = {};
+      _smoothHeatmapPoints = [];
+      _foto2ApResult = Foto2ApResult(
+        success: true,
+        apName: ap.name,
+        lat: ap.lat,
+        lng: ap.lng,
+        building: ap.building,
+        floor: ap.height,
+        espacio: ap.espacio,
+      );
+    });
+    _mapController.move(LatLng(ap.lat, ap.lng), 18.0);
   }
 
   /// Build the Foto2AP result marker (large, prominent).
