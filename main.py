@@ -76,7 +76,7 @@ _route_graph: Optional[nx.MultiDiGraph] = None
 _UAB_BBOX = (2.092, 41.492, 2.118, 41.514)  # (minx, miny, maxx, maxy)
 
 def _load_route_graph() -> nx.MultiDiGraph:
-    """Load or build the UAB campus road graph using osmnx."""
+    """Load the UAB campus road graph from OSM. Returns pure road graph (no AP nodes)."""
     global _route_graph
     if _route_graph is not None:
         return _route_graph
@@ -88,11 +88,8 @@ def _load_route_graph() -> nx.MultiDiGraph:
             network_type="walk",
             simplify=True,
         )
-        # Add AP nodes to the graph
-        from helper_script import add_aps_to_graph
-        ap_nodes = add_aps_to_graph(G, path=str(GEOJSON_PATH))
-        print(f"[INFO] Added {len(ap_nodes)} AP nodes to route graph")
         _route_graph = G
+        print(f"[INFO] Loaded road graph with {len(G.nodes)} nodes, {len(G.edges)} edges")
     except Exception as e:
         print(f"[ERROR] Failed to load route graph: {e}")
         raise
@@ -102,35 +99,27 @@ def _find_route_path(lat: float, lng: float, dest_lat: float, dest_lng: float, a
     """
     Find a walking path on the UAB campus road graph from (lat,lng) to (dest_lat,dest_lng).
     Uses Dijkstra shortest path on real roads.
+    
+    Approach:
+    1. Load the OSM road graph (G_road)
+    2. Find nearest road nodes to start and destination
+    3. Compute Dijkstra shortest path between them on the road graph
+    4. Return path coordinates + nearby APs as waypoints
     """
     G = _load_route_graph()
     
-    # Find nearest graph nodes to start and destination
-    outdoors_nodes = [n for n, d in G.nodes(data=True) if d.get("node_type") is None]
-    start_node = ox.distance.nearest_nodes(G.subgraph(outdoors_nodes), lng, lat)
-    dest_node = ox.distance.nearest_nodes(G.subgraph(outdoors_nodes), dest_lng, dest_lat)
+    # Find nearest road nodes to start and destination
+    start_node = ox.distance.nearest_nodes(G, lng, lat)
+    dest_node = ox.distance.nearest_nodes(G, dest_lng, dest_lat)
     
-    # Find qualified destinations within acceptable_range of the destination
-    from helper_script import find_qualified_in_range, find_paths_to_candidates
-    qualified = find_qualified_in_range(G, dest_node, acceptable_range=acceptable_range, weight_attr="length")
-    
-    if not qualified:
-        # Fall back to direct path to destination node
-        qualified = [dest_node]
-    
-    # Find shortest paths from start to all qualified destinations
-    paths_dict = find_paths_to_candidates(G, start_node, qualified, weight_attr="length")
-    
-    # Pick the best path (shortest distance)
-    best_target = min(paths_dict, key=lambda k: paths_dict[k][0])
-    best_distance, best_path = paths_dict[best_target]
+    # Compute Dijkstra shortest path on the road graph
+    try:
+        best_distance, best_path = nx.single_source_dijkstra(G, start_node, dest_node, weight="length")
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        return {"path": [], "distance": 0, "waypoints": [], "total_waypoints": 0}
     
     if not best_path or best_distance == float('inf'):
-        # Fallback: direct path to destination
-        try:
-            best_distance, best_path = nx.single_source_dijkstra(G, start_node, dest_node, weight="length")
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            return {"path": [], "distance": 0, "waypoints": [], "total_waypoints": 0}
+        return {"path": [], "distance": 0, "waypoints": [], "total_waypoints": 0}
     
     # Convert path nodes to lat/lng coordinates
     path_coords = []
@@ -141,7 +130,7 @@ def _find_route_path(lat: float, lng: float, dest_lat: float, dest_lng: float, a
                 "lng": round(G.nodes[node]["x"], 6),
             })
     
-    # Find APs near the path
+    # Find APs near the start and destination as waypoints
     ap_index = _build_ap_index()
     path_aps = []
     for ap in ap_index:
