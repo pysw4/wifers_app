@@ -932,38 +932,63 @@ class BookingPageState extends State<BookingPage> {
                 ..._myBookings.map((b) => Card(
                       margin: const EdgeInsets.symmetric(vertical: 4),
                       child: Padding(
-                        padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+                        padding: const EdgeInsets.fromLTRB(12, 10, 4, 10),
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            // Leading icon
+                            // Leading icon: booking ID badge
                             Container(
-                              width: 40,
-                              height: 40,
-                              margin: const EdgeInsets.only(right: 10, top: 2),
+                              width: 42,
+                              height: 42,
+                              margin: const EdgeInsets.only(right: 12, top: 2),
                               decoration: BoxDecoration(
-                                gradient: const LinearGradient(
-                                  colors: [Colors.indigo, Colors.indigoAccent],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                ),
+                                color: Colors.indigo,
                                 borderRadius: BorderRadius.circular(10),
                               ),
-                              child: const Icon(Icons.meeting_room,
-                                  color: Colors.white, size: 22),
+                              alignment: Alignment.center,
+                              child: Text(
+                                b.bookingId.length >= 3
+                                    ? b.bookingId.substring(0, 3)
+                                    : b.bookingId,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
                             ),
                             // Info rows
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  // Row 1: Room + AP
-                                  Text('${b.roomCode} • ${b.apName}',
-                                      style: const TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600)),
-                                  const SizedBox(height: 4),
-                                  // Row 2: Date + Time
+                                  // Row 1: Room
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.meeting_room,
+                                          size: 14, color: Colors.indigo),
+                                      const SizedBox(width: 4),
+                                      Text('Room: ${b.roomCode}',
+                                          style: const TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w600)),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 3),
+                                  // Row 2: Recommended AP
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.wifi,
+                                          size: 14, color: Colors.teal),
+                                      const SizedBox(width: 4),
+                                      Text('Recommended AP: ${b.apName}',
+                                          style: TextStyle(
+                                              fontSize: 13,
+                                              color: Colors.grey[700])),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 3),
+                                  // Row 3: Date + Time
                                   Row(
                                     children: [
                                       const Icon(Icons.calendar_today,
@@ -972,8 +997,8 @@ class BookingPageState extends State<BookingPage> {
                                       Text(b.date,
                                           style: TextStyle(
                                               fontSize: 12,
-                                              color: Colors.grey[700])),
-                                      const SizedBox(width: 12),
+                                              color: Colors.grey[600])),
+                                      const SizedBox(width: 8),
                                       const Icon(Icons.access_time,
                                           size: 13, color: Colors.grey),
                                       const SizedBox(width: 4),
@@ -981,11 +1006,11 @@ class BookingPageState extends State<BookingPage> {
                                           '${b.startHour}:00-${b.endHour}:00',
                                           style: TextStyle(
                                               fontSize: 12,
-                                              color: Colors.grey[700])),
+                                              color: Colors.grey[600])),
                                     ],
                                   ),
-                                  const SizedBox(height: 4),
-                                  // Row 3: Students
+                                  const SizedBox(height: 3),
+                                  // Row 4: Students
                                   Row(
                                     children: [
                                       const Icon(Icons.people,
@@ -994,7 +1019,7 @@ class BookingPageState extends State<BookingPage> {
                                       Text('${b.nStudents} students',
                                           style: TextStyle(
                                               fontSize: 12,
-                                              color: Colors.grey[700])),
+                                              color: Colors.grey[600])),
                                     ],
                                   ),
                                 ],
