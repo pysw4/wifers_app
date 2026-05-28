@@ -60,8 +60,10 @@ class _MapPageState extends State<MapPage> {
   String get _currentDayApiName => _dayApiNames[_currentDayIndex];
 
   // Dynamic signal range (computed from actual data)
-  double _signalMinDb = -75.0; // default fallback
-  double _signalMaxDb = -50.0; // default fallback
+  double _signalMinDb = -75.0; // default fallback (legend display - actual min)
+  double _signalMaxDb = -50.0; // default fallback (legend display - actual max)
+  double _colorMapMinDb = -75.0; // color mapping uses p2~p98 to avoid outliers
+  double _colorMapMaxDb = -50.0; // color mapping uses p2~p98 to avoid outliers
 
   // Cache heatmap predictions by AP name
   Map<String, Map<String, dynamic>> _heatmapCache = {};
@@ -731,36 +733,47 @@ class _MapPageState extends State<MapPage> {
         .toList();
 
     // 计算实际信号范围的动态映射
-    // 使用百分位数来避免极端值影响颜色分布
-    double minDb = -75.0;
-    double maxDb = -50.0;
+    // 使用两个范围：
+    //   - _signalMinDb / _signalMaxDb: 实际 min/max，用于图例显示（真实范围）
+    //   - _colorMapMinDb / _colorMapMaxDb: p2~p98 百分位，用于颜色映射（避免极端值拉偏）
+    double legendMinDb = -85.0;
+    double legendMaxDb = -45.0;
+    double colorMinDb = -75.0;
+    double colorMaxDb = -50.0;
     if (parsedSmoothPoints.isNotEmpty) {
       final signals = parsedSmoothPoints
           .map<double>((p) => (p['signal_db'] as num?)?.toDouble() ?? -70.0)
           .toList()
         ..sort();
-      // 使用 5% 和 95% 百分位数作为映射范围，避免极端值
       final n = signals.length;
-      minDb = signals[(n * 0.05).round().clamp(0, n - 1)];
-      maxDb = signals[(n * 0.95).round().clamp(0, n - 1)];
+
+      // 图例显示实际 min/max
+      legendMinDb = signals.first;
+      legendMaxDb = signals.last;
+
+      // 颜色映射使用 p2~p98 避免极端值拉偏
+      colorMinDb = signals[(n * 0.02).round().clamp(0, n - 1)];
+      colorMaxDb = signals[(n * 0.98).round().clamp(0, n - 1)];
       // 确保至少 3dB 的跨度
-      if (maxDb - minDb < 3.0) {
-        final mid = (minDb + maxDb) / 2;
-        minDb = mid - 1.5;
-        maxDb = mid + 1.5;
+      if (colorMaxDb - colorMinDb < 3.0) {
+        final mid = (colorMinDb + colorMaxDb) / 2;
+        colorMinDb = mid - 1.5;
+        colorMaxDb = mid + 1.5;
       }
     }
 
     setState(() {
       _heatmapCache = cache;
       _smoothHeatmapPoints = parsedSmoothPoints;
-      _signalMinDb = minDb;
-      _signalMaxDb = maxDb;
+      _signalMinDb = legendMinDb;
+      _signalMaxDb = legendMaxDb;
+      _colorMapMinDb = colorMinDb;
+      _colorMapMaxDb = colorMaxDb;
       _isLoadingHeatmap = false;
     });
 
     debugPrint('Loaded ${cache.length} AP points + ${parsedSmoothPoints.length} grid points');
-    debugPrint('Signal range: ${minDb.toStringAsFixed(1)} to ${maxDb.toStringAsFixed(1)} dBm');
+    debugPrint('Signal range: ${legendMinDb.toStringAsFixed(1)} to ${legendMaxDb.toStringAsFixed(1)} dBm (color: ${colorMinDb.toStringAsFixed(1)} to ${colorMaxDb.toStringAsFixed(1)})');
   }
 
   Future<void> _showHourPicker() async {
@@ -1196,14 +1209,16 @@ class _MapPageState extends State<MapPage> {
   }
 
   /// Map a signal_db value to a color using the dynamic data range.
-  /// Uses [_signalMinDb] and [_signalMaxDb] computed from actual data.
+  /// Uses [_colorMapMinDb] and [_colorMapMaxDb] (p2~p98 percentile) for
+  /// color mapping to avoid outliers skewing the distribution.
+  /// The legend shows [_signalMinDb] / [_signalMaxDb] (actual min/max).
   /// Uses 4 distinct, high-contrast colors for maximum visual separation:
   ///   Red (#E53935) → Orange (#FB8C00) → Lime (#C0CA33) → Teal (#00897B)
   /// Each color is a flat (non-interpolated) band so adjacent grid cells
   /// with slightly different signal strengths are clearly distinguishable.
   Color _signalDbToColor(double signalDb) {
-    final minDb = _signalMinDb;
-    final maxDb = _signalMaxDb;
+    final minDb = _colorMapMinDb;
+    final maxDb = _colorMapMaxDb;
     final clamped = signalDb.clamp(minDb, maxDb);
     // Normalize: minDb → 0.0 (worst), maxDb → 1.0 (best)
     final t = (clamped - minDb) / (maxDb - minDb);
