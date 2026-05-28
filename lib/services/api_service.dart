@@ -118,11 +118,11 @@ class ApiService {
 
   /// Get room info (AP name, building, floor) for a room code
   Future<Map<String, dynamic>> getRoomInfo(String roomCode) async =>
-      await _get('booking/room-info/$roomCode') as Map<String, dynamic>;
+      await _get('booking/room-info', {'room_code': roomCode}) as Map<String, dynamic>;
 
   /// Get hourly availability for a room on a given date
   Future<Map<String, dynamic>> getBookingAvailability(String roomCode, String date) async =>
-      await _get('booking/availability/$roomCode/$date') as Map<String, dynamic>;
+      await _get('booking/availability/$date', {'room_code': roomCode}) as Map<String, dynamic>;
 
   /// Predict performance for a room/time slot without creating a booking
   Future<Map<String, dynamic>> predictBooking({

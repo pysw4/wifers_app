@@ -1340,8 +1340,8 @@ async def booking_alternatives(request: BookingAlternativesRequest):
     }
 
 
-@app.get("/booking/room-info/{room_code}")
-async def booking_room_info(room_code: str):
+@app.get("/booking/room-info")
+async def booking_room_info(room_code: str = Query(..., description="Room code (e.g. Q4/1005)")):
     """Get AP info for a room code."""
     ap_info = _get_ap_from_room(room_code)
     if ap_info is None:
@@ -1354,8 +1354,8 @@ async def booking_room_info(room_code: str):
     }
 
 
-@app.get("/booking/availability/{room_code}/{date}")
-async def booking_availability(room_code: str, date: str):
+@app.get("/booking/availability/{date}")
+async def booking_availability(room_code: str = Query(..., description="Room code (e.g. Q4/1005)"), date: str = Path(...)):
     """Get hourly availability for a room on a given date."""
     ap_info = _get_ap_from_room(room_code)
     if ap_info is None:
