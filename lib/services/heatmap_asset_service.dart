@@ -12,7 +12,7 @@ class HeatmapAssetService {
   static String get _baseUrl {
     // In production, use relative path (same origin)
     // In development, use the Render static site URL
-    return '';
+    return 'https://wifers-app-api.onrender.com';
   }
 
   /// Load heatmap data for a given day and hour from static files.
