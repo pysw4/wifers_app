@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:wifers_app/services/api_service.dart' show ApiService, ApiException;
+import 'package:wifers_app/services/ap_data_service.dart';
 import 'package:wifers_app/models/booking.dart';
 
 class BookingPage extends StatefulWidget {
@@ -13,8 +14,11 @@ class BookingPage extends StatefulWidget {
 class BookingPageState extends State<BookingPage> {
   final _api = ApiService();
   final _teacherIdController = TextEditingController();
-  final _roomCodeController = TextEditingController();
   final _nStudentsController = TextEditingController(text: '30');
+
+  String? _selectedRoomCode;
+  List<String> _roomCodes = [];
+  bool _roomCodesLoading = true;
 
   DateTime _selectedDate = DateTime.now();
   int _startHour = 10;
@@ -51,12 +55,30 @@ class BookingPageState extends State<BookingPage> {
   void initState() {
     super.initState();
     _selectedDate = _selectedDate.add(const Duration(days: 1));
+    _loadRoomCodes();
+  }
+
+  Future<void> _loadRoomCodes() async {
+    try {
+      final aps = await ApDataService.loadAllAps();
+      final codes = aps
+          .map((ap) => ap.espacio ?? '')
+          .where((c) => c.isNotEmpty)
+          .toSet()
+          .toList()
+        ..sort();
+      setState(() {
+        _roomCodes = codes;
+        _roomCodesLoading = false;
+      });
+    } catch (e) {
+      setState(() => _roomCodesLoading = false);
+    }
   }
 
   @override
   void dispose() {
     _teacherIdController.dispose();
-    _roomCodeController.dispose();
     _nStudentsController.dispose();
     super.dispose();
   }
@@ -91,7 +113,7 @@ class BookingPageState extends State<BookingPage> {
   }
 
   Future<void> _checkAndBook() async {
-    final roomCode = _roomCodeController.text.trim().toUpperCase();
+    final roomCode = _selectedRoomCode;
     final teacherId = _teacherIdController.text.trim();
     final nStudentsStr = _nStudentsController.text.trim();
 
@@ -99,8 +121,8 @@ class BookingPageState extends State<BookingPage> {
       _showSnackBar('Please enter a Teacher ID');
       return;
     }
-    if (roomCode.isEmpty) {
-      _showSnackBar('Please enter a Room Code');
+    if (roomCode == null || roomCode.isEmpty) {
+      _showSnackBar('Please select a Room Code');
       return;
     }
     final nStudents = int.tryParse(nStudentsStr) ?? 30;
@@ -220,8 +242,8 @@ class BookingPageState extends State<BookingPage> {
   }
 
   Future<void> _loadAvailability() async {
-    final roomCode = _roomCodeController.text.trim().toUpperCase();
-    if (roomCode.isEmpty) return;
+    final roomCode = _selectedRoomCode;
+    if (roomCode == null || roomCode.isEmpty) return;
 
     setState(() => _availabilityLoading = true);
     try {
@@ -243,7 +265,7 @@ class BookingPageState extends State<BookingPage> {
   }
 
   Future<void> _loadAlternatives() async {
-    final roomCode = _roomCodeController.text.trim().toUpperCase();
+    final roomCode = _selectedRoomCode ?? '';
     final nStudents = int.tryParse(_nStudentsController.text.trim()) ?? 30;
 
     try {
@@ -402,16 +424,27 @@ class BookingPageState extends State<BookingPage> {
             const SizedBox(height: 12),
 
             // Room code
-            TextField(
-              controller: _roomCodeController,
+            DropdownButtonFormField<String>(
+              value: _selectedRoomCode,
               decoration: const InputDecoration(
                 labelText: 'Room Code',
-                hintText: 'e.g. Q4/1007',
                 prefixIcon: Icon(Icons.meeting_room),
                 border: OutlineInputBorder(),
               ),
-              textCapitalization: TextCapitalization.characters,
-              onChanged: (_) => setState(() => _availabilityHours = []),
+              isExpanded: true,
+              hint: const Text('Select a room'),
+              items: _roomCodesLoading
+                  ? [const DropdownMenuItem(value: null, child: Text('Loading rooms...'))]
+                  : _roomCodes.map((c) => DropdownMenuItem(
+                      value: c,
+                      child: Text(c, overflow: TextOverflow.ellipsis),
+                    )).toList(),
+              onChanged: (v) {
+                setState(() {
+                  _selectedRoomCode = v;
+                  _availabilityHours = [];
+                });
+              },
             ),
             const SizedBox(height: 12),
 
@@ -531,7 +564,7 @@ class BookingPageState extends State<BookingPage> {
             const SizedBox(height: 12),
 
             // Availability grid
-            if (_roomCodeController.text.trim().isNotEmpty)
+            if (_selectedRoomCode != null && _selectedRoomCode!.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: Row(
