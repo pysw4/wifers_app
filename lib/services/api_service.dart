@@ -89,6 +89,9 @@ class ApiService {
   Future<Map<String, dynamic>> getPredictionStats(String apName) async =>
       await _get('predict/stats/$apName') as Map<String, dynamic>;
 
+  /// Get detailed prediction vs actual signal accuracy for a specific AP
+  Future<Map<String, dynamic>> getAPSignalAccuracy(String apName) async =>
+      await _get('predict/signal_strength/accuracy/$apName') as Map<String, dynamic>;
 
   Future<Map<String, dynamic>> recommendAPs({
     required double lat,
@@ -115,7 +118,7 @@ class ApiService {
 
   /// Predict performance for a room/time slot without creating a booking
   Future<Map<String, dynamic>> predictBooking({
-    required String roomCode,
+    String? roomCode,
     required String date,
     required int startHour,
     required int endHour,
@@ -131,8 +134,8 @@ class ApiService {
 
   /// Create a new booking
   Future<Map<String, dynamic>> createBooking({
-    required String teacherId,
-    required String roomCode,
+    String? teacherId,
+    String? roomCode,
     required String date,
     required int startHour,
     required int endHour,

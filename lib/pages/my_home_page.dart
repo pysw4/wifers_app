@@ -20,14 +20,13 @@ class _MyHomePageState extends State<MyHomePage> {
 
   // Global keys to access child states
   final _recommendPageKey = GlobalKey<RecommendPageState>();
-  final _settingPageKey = GlobalKey<SettingPageState>();
 
   // Page title list
   static const List<String> _titles = [
     'Map',
     'Favorites',
     'Recommend',
-    'Settings',
+    'Booking',
   ];
 
   @override
@@ -37,13 +36,14 @@ class _MyHomePageState extends State<MyHomePage> {
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         title: Text(_titles[currentIndex]),
         actions: [
+          // Settings icon in the top-right corner
           IconButton(
-            icon: const Icon(Icons.book_online),
-            tooltip: 'Room Booking',
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
             onPressed: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(builder: (context) => const BookingPage()),
+                MaterialPageRoute(builder: (context) => const SettingPage()),
               );
             },
           ),
@@ -73,7 +73,7 @@ class _MyHomePageState extends State<MyHomePage> {
             },
           ),
           RecommendPage(key: _recommendPageKey),
-          SettingPage(key: _settingPageKey),
+          const BookingPage(showAppBar: false),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(
@@ -90,8 +90,6 @@ class _MyHomePageState extends State<MyHomePage> {
           // Reload settings when switching between tabs
           if (index == 2) {
             _recommendPageKey.currentState?.reloadSettings();
-          } else if (index == 3) {
-            _settingPageKey.currentState?.reloadSettings();
           }
         },
         items: const [
@@ -111,9 +109,9 @@ class _MyHomePageState extends State<MyHomePage> {
             label: "Recommend",
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.settings_outlined),
-            activeIcon: Icon(Icons.settings),
-            label: "Settings",
+            icon: Icon(Icons.book_online_outlined),
+            activeIcon: Icon(Icons.book_online),
+            label: "Booking",
           ),
         ],
       ),

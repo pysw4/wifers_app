@@ -1126,8 +1126,8 @@ async def foto2ap_recognize(file: UploadFile = File(...)):
 
 
 class BookingCreateRequest(BaseModel):
-    teacher_id: str = Field(min_length=1, max_length=100)
-    room_code: str = Field(min_length=1, max_length=50)
+    teacher_id: Optional[str] = Field(default=None, max_length=100)
+    room_code: Optional[str] = Field(default=None, max_length=50)
     date: str = Field(description="Date in YYYY-MM-DD format")
     start_hour: int = Field(ge=7, le=22)
     end_hour: int = Field(ge=8, le=23)
@@ -1140,7 +1140,7 @@ class BookingCancelRequest(BaseModel):
 
 
 class BookingPredictRequest(BaseModel):
-    room_code: str = Field(min_length=1, max_length=50)
+    room_code: Optional[str] = Field(default=None, max_length=50)
     date: str = Field(description="Date in YYYY-MM-DD format")
     start_hour: int = Field(ge=7, le=22)
     end_hour: int = Field(ge=8, le=23)
@@ -1148,14 +1148,14 @@ class BookingPredictRequest(BaseModel):
 
 
 class BookingSuggestSlotRequest(BaseModel):
-    room_code: str = Field(min_length=1, max_length=50)
+    room_code: Optional[str] = Field(default=None, max_length=50)
     date: str = Field(description="Date in YYYY-MM-DD format")
     duration_hours: int = Field(ge=1, le=6)
     n_students: int = Field(ge=1, le=200)
 
 
 class BookingAlternativesRequest(BaseModel):
-    room_code: str = Field(min_length=1, max_length=50)
+    room_code: Optional[str] = Field(default=None, max_length=50)
     date: str = Field(description="Date in YYYY-MM-DD format")
     start_hour: int = Field(ge=7, le=22)
     end_hour: int = Field(ge=8, le=23)

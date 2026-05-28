@@ -26,8 +26,9 @@ class _APTrendDialogState extends State<APTrendDialog> {
   String _dayLabel = 'Weekday';
   Map<String, dynamic> _stats = {};
   Map<String, dynamic> _accuracy = {};
+  Map<String, dynamic>? _accuracyVsActual; // accuracy_vs_actual from trend API
   bool _showBars = true; // Toggle line chart / bar chart
-
+  bool _showActual = false; // Toggle actual average overlay
 
   /// Map backend day names ('mon'/'tue'/.../'sun') to display labels
   static const Map<String, String> _dayLabels = {
@@ -48,7 +49,6 @@ class _APTrendDialogState extends State<APTrendDialog> {
     return '$label (${isWeekend ? 'Weekend' : 'Weekday'})';
   }
 
-
   @override
   void initState() {
     super.initState();
@@ -68,10 +68,9 @@ class _APTrendDialogState extends State<APTrendDialog> {
         _dayLabel = _formatDayType(rawDayType);
         _stats = data['stats'] as Map<String, dynamic>? ?? {};
         _accuracy = data['accuracy'] as Map<String, dynamic>? ?? {};
+        _accuracyVsActual = data['accuracy_vs_actual'] as Map<String, dynamic>?;
         _isLoading = false;
       });
-
-
     } catch (e) {
       setState(() {
         _error = e.toString();
@@ -105,7 +104,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
       insetPadding: const EdgeInsets.all(12),
       child: Container(
         width: double.maxFinite,
-        constraints: const BoxConstraints(maxHeight: 580),
+        constraints: const BoxConstraints(maxHeight: 620),
         padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -153,7 +152,6 @@ class _APTrendDialogState extends State<APTrendDialog> {
                     ),
                   ),
                 ),
-
               ],
             ),
             const SizedBox(height: 6),
@@ -174,8 +172,13 @@ class _APTrendDialogState extends State<APTrendDialog> {
               _buildAccuracyRow(),
             ],
 
-            const Divider(height: 16),
+            // Accuracy vs Actual row (from clientes_processed.csv)
+            if (_accuracyVsActual != null) ...[
+              const SizedBox(height: 6),
+              _buildAccuracyVsActualRow(),
+            ],
 
+            const Divider(height: 12),
 
             // Chart area
             Expanded(
@@ -221,6 +224,20 @@ class _APTrendDialogState extends State<APTrendDialog> {
                     style: const TextStyle(fontSize: 12),
                   ),
                 ),
+                // Toggle actual average overlay (only if data available)
+                if (_accuracyVsActual != null && _accuracyVsActual!['hourly'] != null)
+                  TextButton.icon(
+                    onPressed: () => setState(() => _showActual = !_showActual),
+                    icon: Icon(
+                      _showActual ? Icons.visibility : Icons.visibility_off,
+                      size: 18,
+                      color: Colors.green,
+                    ),
+                    label: Text(
+                      _showActual ? 'Hide Actual' : 'Show Actual',
+                      style: const TextStyle(fontSize: 12, color: Colors.green),
+                    ),
+                  ),
                 const Spacer(),
                 // Close button
                 SizedBox(
@@ -319,6 +336,74 @@ class _APTrendDialogState extends State<APTrendDialog> {
     );
   }
 
+  Widget _buildAccuracyVsActualRow() {
+    final mae = _accuracyVsActual!['mae'] as num?;
+    final signalAccuracy = _accuracyVsActual!['signal_accuracy'] as num?;
+    final statusAccuracy = _accuracyVsActual!['status_accuracy'] as num?;
+    final totalMeasurements = _accuracyVsActual!['total_measurements'] as int? ?? 0;
+    final comparedHours = _accuracyVsActual!['compared_hours'] as int? ?? 0;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.indigo.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.indigo.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.analytics_outlined, size: 14, color: Colors.indigo),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'MAE: ±${mae?.toStringAsFixed(1) ?? "?"} dBm',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.indigo,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    if (signalAccuracy != null)
+                      Text(
+                        'Signal: ${(signalAccuracy * 100).toStringAsFixed(0)}%',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: signalAccuracy >= 0.7 ? Colors.green[700] : Colors.orange[700],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    if (statusAccuracy != null) ...[
+                      const SizedBox(width: 8),
+                      Text(
+                        'Status: ${(statusAccuracy * 100).toStringAsFixed(0)}%',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: statusAccuracy >= 0.8 ? Colors.green[700] : Colors.orange[700],
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                Text(
+                  'Based on $totalMeasurements measurements across $comparedHours hours',
+                  style: TextStyle(fontSize: 9, color: Colors.grey[500]),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildMiniStat(String label, num accuracy, Color color) {
     return Padding(
       padding: const EdgeInsets.only(right: 6),
@@ -337,7 +422,6 @@ class _APTrendDialogState extends State<APTrendDialog> {
   }
 
   Widget _buildStatItem(IconData icon, String label, String value, Color color) {
-
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -357,6 +441,21 @@ class _APTrendDialogState extends State<APTrendDialog> {
         ),
       ],
     );
+  }
+
+  /// Get actual average data points for overlay (from accuracy_vs_actual.hourly)
+  List<FlSpot>? _getActualSpots() {
+    if (_accuracyVsActual == null) return null;
+    final hourly = _accuracyVsActual!['hourly'] as List<dynamic>?;
+    if (hourly == null || hourly.isEmpty) return null;
+    
+    final spots = <FlSpot>[];
+    for (final entry in hourly) {
+      final h = (entry['hour'] as num).toDouble();
+      final actualDb = (entry['actual_mean'] as num).toDouble();
+      spots.add(FlSpot(h, actualDb));
+    }
+    return spots;
   }
 
   Widget _buildChart() {
@@ -381,6 +480,14 @@ class _APTrendDialogState extends State<APTrendDialog> {
       final db = (d['signal_db'] as num).toDouble();
       if (db < minDb) minDb = db;
       if (db > maxDb) maxDb = db;
+    }
+    // Also consider actual data range
+    final actualSpots = _getActualSpots();
+    if (actualSpots != null) {
+      for (final spot in actualSpots) {
+        if (spot.y < minDb) minDb = spot.y;
+        if (spot.y > maxDb) maxDb = spot.y;
+      }
     }
     minDb -= 3;
     maxDb += 3;
@@ -466,15 +573,31 @@ class _APTrendDialogState extends State<APTrendDialog> {
                 );
                 final db = (data['signal_db'] as num).toDouble();
                 final status = data['predicted_status'] as String? ?? _dbmToQuality(db);
+                
+                // Check if actual data exists for this hour
+                String actualStr = '';
+                if (_showActual && _accuracyVsActual != null) {
+                  final hourly = _accuracyVsActual!['hourly'] as List<dynamic>?;
+                  if (hourly != null) {
+                    for (final entry in hourly) {
+                      if ((entry['hour'] as num).toInt() == group.x) {
+                        final actualDb = (entry['actual_mean'] as num).toDouble();
+                        final diff = (entry['diff'] as num).toDouble();
+                        actualStr = '\nActual: ${actualDb.toStringAsFixed(1)} dBm\nDiff: ${diff.toStringAsFixed(1)} dBm';
+                        break;
+                      }
+                    }
+                  }
+                }
+                
                 return BarTooltipItem(
-                  '${group.x}:00\n${db.toStringAsFixed(1)} dBm\nStatus: $status',
+                  '${group.x}:00\n${db.toStringAsFixed(1)} dBm\nStatus: $status$actualStr',
                   TextStyle(
                     color: _dbmToColor(db),
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
                   ),
                 );
-
               },
             ),
           ),
@@ -536,6 +659,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
         minY: minDb,
         maxY: maxDb,
         lineBarsData: [
+          // Predicted line (blue)
           LineChartBarData(
             spots: spots,
             isCurved: true,
@@ -560,6 +684,28 @@ class _APTrendDialogState extends State<APTrendDialog> {
               color: Colors.blue.withValues(alpha: 0.08),
             ),
           ),
+          // Actual average line (green, dashed) - only when toggled on
+          if (_showActual && actualSpots != null)
+            LineChartBarData(
+              spots: actualSpots,
+              isCurved: true,
+              curveSmoothness: 0.3,
+              color: Colors.green,
+              barWidth: 2,
+              isStrokeCapRound: true,
+              dashArray: [6, 3],
+              dotData: FlDotData(
+                show: true,
+                getDotPainter: (spot, percent, barData, index) {
+                  return FlDotCirclePainter(
+                    radius: 3,
+                    color: Colors.green,
+                    strokeWidth: 1,
+                    strokeColor: Colors.white,
+                  );
+                },
+              ),
+            ),
         ],
         lineTouchData: LineTouchData(
           touchTooltipData: LineTouchTooltipData(
@@ -574,15 +720,31 @@ class _APTrendDialogState extends State<APTrendDialog> {
                 final status = matchingData.isNotEmpty
                     ? (matchingData.first['predicted_status'] as String? ?? quality)
                     : quality;
+                
+                // Check if actual data exists for this hour
+                String actualStr = '';
+                if (_showActual && _accuracyVsActual != null) {
+                  final hourly = _accuracyVsActual!['hourly'] as List<dynamic>?;
+                  if (hourly != null) {
+                    for (final entry in hourly) {
+                      if ((entry['hour'] as num).toInt() == spot.x.toInt()) {
+                        final actualDb = (entry['actual_mean'] as num).toDouble();
+                        final diff = (entry['diff'] as num).toDouble();
+                        actualStr = '\nActual: ${actualDb.toStringAsFixed(1)} dBm\nDiff: ${diff.toStringAsFixed(1)} dBm';
+                        break;
+                      }
+                    }
+                  }
+                }
+                
                 return LineTooltipItem(
-                  '${spot.x.toInt()}:00\n${db.toStringAsFixed(1)} dBm\nStatus: $status',
+                  '${spot.x.toInt()}:00\n${db.toStringAsFixed(1)} dBm\nStatus: $status$actualStr',
                   TextStyle(
                     color: _dbmToColor(db),
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
                   ),
                 );
-
               }).toList();
             },
           ),

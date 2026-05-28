@@ -3,7 +3,9 @@ import 'package:wifers_app/services/api_service.dart' show ApiService, ApiExcept
 import 'package:wifers_app/models/booking.dart';
 
 class BookingPage extends StatefulWidget {
-  const BookingPage({super.key});
+  final bool showAppBar;
+
+  const BookingPage({super.key, this.showAppBar = true});
   @override
   State<BookingPage> createState() => _BookingPageState();
 }
@@ -64,10 +66,6 @@ class _BookingPageState extends State<BookingPage> {
 
   Future<void> _loadMyBookings() async {
     final tid = _teacherIdController.text.trim();
-    if (tid.isEmpty) {
-      _showSnackBar('Please enter a Teacher ID first');
-      return;
-    }
     setState(() => _loading = true);
     try {
       final resp = await _api.listBookings(teacherId: tid);
@@ -91,14 +89,6 @@ class _BookingPageState extends State<BookingPage> {
     final teacherId = _teacherIdController.text.trim();
     final nStudentsStr = _nStudentsController.text.trim();
 
-    if (roomCode.isEmpty) {
-      _showSnackBar('Please enter a room code');
-      return;
-    }
-    if (teacherId.isEmpty) {
-      _showSnackBar('Please enter a Teacher ID');
-      return;
-    }
     final nStudents = int.tryParse(nStudentsStr) ?? 30;
     if (nStudents < 1 || nStudents > 200) {
       _showSnackBar('Students must be between 1 and 200');
@@ -239,10 +229,6 @@ class _BookingPageState extends State<BookingPage> {
 
   Future<void> _suggestSlot() async {
     final roomCode = _roomCodeController.text.trim().toUpperCase();
-    if (roomCode.isEmpty) {
-      _showSnackBar('Please enter a room code');
-      return;
-    }
     final nStudents = int.tryParse(_nStudentsController.text.trim()) ?? 30;
 
     setState(() {
@@ -362,18 +348,20 @@ class _BookingPageState extends State<BookingPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Room Booking'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          IconButton(
-            icon: Icon(
-                _showMyBookings ? Icons.list : Icons.person_search),
-            tooltip: 'My Bookings',
-            onPressed: _loadMyBookings,
-          ),
-        ],
-      ),
+      appBar: widget.showAppBar
+          ? AppBar(
+              title: const Text('Room Booking'),
+              backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+              actions: [
+                IconButton(
+                  icon: Icon(
+                      _showMyBookings ? Icons.list : Icons.person_search),
+                  tooltip: 'My Bookings',
+                  onPressed: _loadMyBookings,
+                ),
+              ],
+            )
+          : null,
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
