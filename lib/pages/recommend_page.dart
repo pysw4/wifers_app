@@ -375,7 +375,7 @@ class RecommendPageState extends State<RecommendPage> {
                           isExpanded: true,
                           hint: const Text('Select a building', style: TextStyle(fontSize: 14)),
                           items: [
-                            const DropdownMenuItem(value: '', child: Text('Select a building', style: TextStyle(fontSize: 14))),
+                            const DropdownMenuItem(value: '', child: Text('All buildings', style: TextStyle(fontSize: 14))),
                             ..._buildings.map((b) => DropdownMenuItem(value: b, child: Text(b, style: const TextStyle(fontSize: 14)))),
                           ],
                           onChanged: (v) { if (v != null) { setState(() => _building = v); _saveBuilding(v); } },

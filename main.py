@@ -209,17 +209,28 @@ def _build_ap_index() -> list[dict]:
         return _ap_index
     geojson = _load_geojson()
     _ap_index = []
+    seen_ids = {}
     for feature in geojson["features"]:
         props = feature["properties"]
         coords = feature["geometry"]["coordinates"]
+        ap_name = props.get("USER_NOM_A", "Unknown")
+        espacio = props.get("USER_Espai", "")
+        # Build a unique ID from AP name + espacio (room code)
+        unique_id = f"{ap_name}_{espacio}" if espacio else ap_name
+        # Handle duplicate AP names by appending a counter
+        if unique_id in seen_ids:
+            seen_ids[unique_id] += 1
+            unique_id = f"{unique_id}_{seen_ids[unique_id]}"
+        else:
+            seen_ids[unique_id] = 0
         _ap_index.append({
-            "id": props.get("USER_ID", props.get("USER_NOM_A", "")),
-            "name": props.get("USER_NOM_A", "Unknown"),
+            "id": unique_id,
+            "name": ap_name,
             "lat": float(coords[1]),
             "lng": float(coords[0]),
-            "building": props.get("USER_EDIFI", "Unknown"),
+            "building": props.get("USER_EDIFI", props.get("Nom_Edific", "Unknown")),
             "floor": float(props.get("Num_Planta", 0) or 0),
-            "espacio": props.get("USER_Espai", ""),
+            "espacio": espacio,
         })
     return _ap_index
 
@@ -273,15 +284,38 @@ def _load_heatmap_file(day: str, hour: int) -> dict:
     return data
 
 
+def _normalize_text(text: str) -> str:
+    """Normalize text by removing diacritics (accents) and converting to lowercase."""
+    import unicodedata
+    # Normalize to NFKD form which separates base characters from diacritics
+    nfkd = unicodedata.normalize('NFKD', text)
+    # Remove combining diacritical marks (accents, cedillas, etc.)
+    return ''.join(c for c in nfkd if not unicodedata.combining(c)).lower()
+
+
 def _encode_building(building_name: str) -> int:
     encoder = _load_building_encoder()
     meta = _load_signal_strength_meta()
     buildings_list = meta.get("buildings", [])
     if encoder is not None and building_name in encoder.classes_:
         return int(encoder.transform([building_name])[0])
+    # Try exact match with encoder classes (case-insensitive)
+    if encoder is not None:
+        for cls in encoder.classes_:
+            if building_name.lower() == cls.lower():
+                return int(encoder.transform([cls])[0])
+    # Try fuzzy match with buildings_list
+    norm_building = _normalize_text(building_name)
     for i, b in enumerate(buildings_list):
-        if building_name.lower() in b.lower() or b.lower() in building_name.lower():
+        norm_b = _normalize_text(b)
+        if norm_building in norm_b or norm_b in norm_building:
             return i
+    # Try fuzzy match with encoder classes
+    if encoder is not None:
+        for i, cls in enumerate(encoder.classes_):
+            norm_cls = _normalize_text(cls)
+            if norm_building in norm_cls or norm_cls in norm_building:
+                return i
     return 0
 
 
