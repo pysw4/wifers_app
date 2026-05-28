@@ -172,11 +172,23 @@ class RecommendPageState extends State<RecommendPage> {
       final pos = LatLng(p.latitude, p.longitude);
       if (!LocationService.isNearCampus(pos)) {
         if (!await _showGateDialog('Outside Campus', 'Navigation only available from within campus. Start from campus gate?')) return;
-        final gp = await _api.fetchRoute(LocationService.campusGateLng, LocationService.campusGateLat, ap.lng, ap.lat);
+        final result = await _api.fetchAdvancedRoute(
+          LocationService.campusGateLng, LocationService.campusGateLat,
+          ap.lng, ap.lat,
+        );
+        final gp = (result['path'] as List).map<LatLng>((item) => LatLng(
+          (item['lat'] as num).toDouble(), (item['lng'] as num).toDouble(),
+        )).toList();
         if (gp.isNotEmpty && mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => RoutePage(path: gp, title: 'Navigate to ${ap.name} (from Gate)')));
         return;
       }
-      final path = await _api.fetchRoute(p.longitude, p.latitude, ap.lng, ap.lat);
+      final result = await _api.fetchAdvancedRoute(
+        p.longitude, p.latitude,
+        ap.lng, ap.lat,
+      );
+      final path = (result['path'] as List).map<LatLng>((item) => LatLng(
+        (item['lat'] as num).toDouble(), (item['lng'] as num).toDouble(),
+      )).toList();
       if (path.isNotEmpty && mounted) Navigator.push(context, MaterialPageRoute(builder: (_) => RoutePage(path: path, title: 'Navigate to ${ap.name}')));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Navigation error: $e')));
@@ -192,7 +204,7 @@ class RecommendPageState extends State<RecommendPage> {
         title: const Text('AP Recommendation'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -412,74 +424,78 @@ class RecommendPageState extends State<RecommendPage> {
             ),
             const SizedBox(height: 12),
             // Results list
-            Expanded(
-              child: _results.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
+            if (_results.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 48),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(_modeIcon, size: 64, color: Colors.grey[300]),
+                      const SizedBox(height: 16),
+                      Text(
+                        'No recommendations yet.\nTap the button above.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey[500]),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _results.length,
+                itemBuilder: (c, i) {
+                  final a = _results[i];
+                  final sc = _dbmToColor(a.signalDb);
+                  return Card(
+                    margin: const EdgeInsets.symmetric(vertical: 6),
+                    child: ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: _modeColor.withValues(alpha: 0.15),
+                        child: Text('${i+1}', style: TextStyle(fontWeight: FontWeight.bold, color: _modeColor)),
+                      ),
+                      title: Text(a.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                      subtitle: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(_modeIcon, size: 64, color: Colors.grey[300]),
-                          const SizedBox(height: 16),
-                          Text(
-                            'No recommendations yet.\nTap the button above.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.grey[500]),
+                          Text('${a.building} • ${a.floor != null ? "Floor ${a.floor}" : "Floor unknown"}'),
+                          const SizedBox(height: 4),
+                          Wrap(
+                            spacing: 4,
+                            runSpacing: 2,
+                            children: [
+                              Icon(Icons.near_me, size: 12, color: Colors.grey[600]),
+                              const SizedBox(width: 2),
+                              Text('${a.distance.toStringAsFixed(0)} m', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+                              const SizedBox(width: 8),
+                              Icon(Icons.signal_wifi_4_bar, size: 12, color: sc),
+                              const SizedBox(width: 2),
+                              Text('${a.signalDb.toStringAsFixed(1)} dBm', style: TextStyle(fontSize: 11, color: sc)),
+                            ],
                           ),
                         ],
                       ),
-                    )
-                  : ListView.builder(
-                      itemCount: _results.length,
-                      itemBuilder: (c, i) {
-                        final a = _results[i];
-                        final sc = _dbmToColor(a.signalDb);
-                        return Card(
-                          margin: const EdgeInsets.symmetric(vertical: 6),
-                          child: ListTile(
-                            leading: CircleAvatar(
-                              backgroundColor: _modeColor.withValues(alpha: 0.15),
-                              child: Text('${i+1}', style: TextStyle(fontWeight: FontWeight.bold, color: _modeColor)),
-                            ),
-                            title: Text(a.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('${a.building} • ${a.floor != null ? "Floor ${a.floor}" : "Floor unknown"}'),
-                                const SizedBox(height: 4),
-                                Wrap(
-                                  spacing: 4,
-                                  runSpacing: 2,
-                                  children: [
-                                    Icon(Icons.near_me, size: 12, color: Colors.grey[600]),
-                                    const SizedBox(width: 2),
-                                    Text('${a.distance.toStringAsFixed(0)} m', style: TextStyle(fontSize: 11, color: Colors.grey[600])),
-                                    const SizedBox(width: 8),
-                                    Icon(Icons.signal_wifi_4_bar, size: 12, color: sc),
-                                    const SizedBox(width: 2),
-                                    Text('${a.signalDb.toStringAsFixed(1)} dBm', style: TextStyle(fontSize: 11, color: sc)),
-                                  ],
-                                ),
-                              ],
-                            ),
-                            trailing: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              crossAxisAlignment: CrossAxisAlignment.end,
-                              children: [
-                                Row(mainAxisSize: MainAxisSize.min, children: [
-                                  Icon(Icons.wifi, size: 14, color: a.prediction == 'Up' ? Colors.green : Colors.red),
-                                  const SizedBox(width: 4),
-                                  Text('${(a.score*100).toStringAsFixed(0)}%', style: TextStyle(fontWeight: FontWeight.bold, color: a.prediction == 'Up' ? Colors.green : Colors.red)),
-                                ]),
-                                const SizedBox(height: 2),
-                                Text('${a.confidence.toStringAsFixed(2)} conf', style: TextStyle(fontSize: 10, color: Colors.grey[500])),
-                              ],
-                            ),
-                            onTap: () => _navigateToAp(a),
-                          ),
-                        );
-                      },
+                      trailing: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Row(mainAxisSize: MainAxisSize.min, children: [
+                            Icon(Icons.wifi, size: 14, color: a.prediction == 'Up' ? Colors.green : Colors.red),
+                            const SizedBox(width: 4),
+                            Text('${(a.score*100).toStringAsFixed(0)}%', style: TextStyle(fontWeight: FontWeight.bold, color: a.prediction == 'Up' ? Colors.green : Colors.red)),
+                          ]),
+                          const SizedBox(height: 2),
+                          Text('${a.confidence.toStringAsFixed(2)} conf', style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+                        ],
+                      ),
+                      onTap: () => _navigateToAp(a),
                     ),
-            ),
+                  );
+                },
+              ),
           ],
         ),
       ),

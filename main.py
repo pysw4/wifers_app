@@ -1113,13 +1113,19 @@ async def recommend_aps(request: RecommendRequest):
 
 
 @app.get("/route/{lat}/{lng}/{dest_lat}/{dest_lng}")
-async def get_route(lat: float, lng: float, dest_lat: float, dest_lng: float):
-    num_points = 20
-    path = []
-    for i in range(num_points + 1):
-        t = i / num_points
-        path.append({"lat": round(lat + (dest_lat - lat) * t, 6), "lng": round(lng + (dest_lng - lng) * t, 6)})
-    return {"path": path}
+async def get_route(lat: float, lng: float, dest_lat: float, dest_lng: float, acceptable_range: int = Query(default=500, ge=100, le=5000, alias="acceptable_range")):
+    try:
+        _load_geojson()
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    ap_index = _build_ap_index()
+    path_aps = []
+    for ap in ap_index:
+        dist_to_start = _approximate_distance(lat, lng, ap["lat"], ap["lng"])
+        dist_to_dest = _approximate_distance(dest_lat, dest_lng, ap["lat"], ap["lng"])
+        if dist_to_start <= acceptable_range or dist_to_dest <= acceptable_range:
+            path_aps.append({"lat": ap["lat"], "lng": ap["lng"], "building": ap["building"], "floor": int(ap["floor"]), "ap_name": ap["name"], "distance_to_start": round(dist_to_start, 1), "distance_to_dest": round(dist_to_dest, 1)})
+    return {"path": [{"lat": round(lat, 6), "lng": round(lng, 6)}] + [{"lat": round(ap["lat"], 6), "lng": round(ap["lng"], 6)} for ap in path_aps] + [{"lat": round(dest_lat, 6), "lng": round(dest_lng, 6)}], "waypoints": path_aps, "total_waypoints": len(path_aps)}
 
 
 @app.get("/route/advanced/{lat}/{lng}/{dest_lat}/{dest_lng}")
