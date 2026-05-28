@@ -296,6 +296,33 @@ class BookingPageState extends State<BookingPage> {
   }
 
   Future<void> _cancelBooking(String bookingId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+            SizedBox(width: 8),
+            Text('Cancel Booking'),
+          ],
+        ),
+        content: Text('Are you sure you want to cancel booking\n'
+            '"$bookingId"?\n\nThis action cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Keep Booking'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Yes, Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
     try {
       await _api.cancelBooking(bookingId);
       _showSnackBar('Booking cancelled');
@@ -904,39 +931,86 @@ class BookingPageState extends State<BookingPage> {
               else
                 ..._myBookings.map((b) => Card(
                       margin: const EdgeInsets.symmetric(vertical: 4),
-                      child: ListTile(
-                        dense: true,
-                        leading: CircleAvatar(
-                          backgroundColor: Colors.indigo[50],
-                          radius: 18,
-                          child: Text(
-                            b.bookingId.length >= 3
-                                ? b.bookingId.substring(0, 3)
-                                : b.bookingId,
-                            style: TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.indigo[700]),
-                          ),
-                        ),
-                        title: Text('${b.roomCode} • ${b.apName}',
-                            style: const TextStyle(fontSize: 13)),
-                        subtitle: Text(
-                          '${b.date} • ${b.startHour}:00-${b.endHour}:00 • ${b.nStudents} students',
-                          style: const TextStyle(fontSize: 11),
-                        ),
-                        trailing: SizedBox(
-                          width: 90,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (b.predictedPerformance != null)
-                                Flexible(
-                                  child: Container(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // Leading icon
+                            Container(
+                              width: 40,
+                              height: 40,
+                              margin: const EdgeInsets.only(right: 10, top: 2),
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [Colors.indigo, Colors.indigoAccent],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
+                                ),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: const Icon(Icons.meeting_room,
+                                  color: Colors.white, size: 22),
+                            ),
+                            // Info rows
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Row 1: Room + AP
+                                  Text('${b.roomCode} • ${b.apName}',
+                                      style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600)),
+                                  const SizedBox(height: 4),
+                                  // Row 2: Date + Time
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.calendar_today,
+                                          size: 13, color: Colors.grey),
+                                      const SizedBox(width: 4),
+                                      Text(b.date,
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[700])),
+                                      const SizedBox(width: 12),
+                                      const Icon(Icons.access_time,
+                                          size: 13, color: Colors.grey),
+                                      const SizedBox(width: 4),
+                                      Text(
+                                          '${b.startHour}:00-${b.endHour}:00',
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[700])),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 4),
+                                  // Row 3: Students
+                                  Row(
+                                    children: [
+                                      const Icon(Icons.people,
+                                          size: 13, color: Colors.grey),
+                                      const SizedBox(width: 4),
+                                      Text('${b.nStudents} students',
+                                          style: TextStyle(
+                                              fontSize: 12,
+                                              color: Colors.grey[700])),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            // Trailing: performance badge + cancel
+                            Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (b.predictedPerformance != null)
+                                  Container(
                                     padding: const EdgeInsets.symmetric(
-                                        horizontal: 4, vertical: 2),
+                                        horizontal: 6, vertical: 2),
                                     decoration: BoxDecoration(
-                                      color: (_perfColors[b.predictedPerformance] ??
+                                      color: (_perfColors[
+                                                  b.predictedPerformance] ??
                                               Colors.grey)
                                           .withValues(alpha: 0.15),
                                       borderRadius: BorderRadius.circular(8),
@@ -949,20 +1023,22 @@ class BookingPageState extends State<BookingPage> {
                                             b.predictedPerformance],
                                         fontWeight: FontWeight.w500,
                                       ),
-                                      overflow: TextOverflow.ellipsis,
                                     ),
                                   ),
+                                const SizedBox(height: 4),
+                                IconButton(
+                                  icon: const Icon(Icons.cancel_outlined,
+                                      size: 20, color: Colors.red),
+                                  onPressed: () =>
+                                      _cancelBooking(b.bookingId),
+                                  constraints: const BoxConstraints(
+                                      minWidth: 32, minHeight: 32),
+                                  padding: EdgeInsets.zero,
+                                  tooltip: 'Cancel booking',
                                 ),
-                              const SizedBox(width: 2),
-                              IconButton(
-                                icon: const Icon(Icons.cancel_outlined,
-                                    size: 18, color: Colors.red),
-                                onPressed: () => _cancelBooking(b.bookingId),
-                                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-                                padding: EdgeInsets.zero,
-                              ),
-                            ],
-                          ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
                     )),
