@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -781,7 +782,57 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  /// Build smooth heatmap grid polygons from the loaded grid points
+  /// Maximum distance (in meters) from the nearest AP for a grid point
+  /// to be considered "covered". Points farther than this are hidden.
+  static const double _apCoverageRadiusM = 60.0;
+
+  /// Haversine distance in meters between two lat/lng points.
+  static double _haversineM(double lat1, double lng1, double lat2, double lng2) {
+    const double r = 6371000; // Earth radius in meters
+    final dLat = (lat2 - lat1) * math.pi / 180;
+    final dLng = (lng2 - lng1) * math.pi / 180;
+    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1 * math.pi / 180) *
+            math.cos(lat2 * math.pi / 180) *
+            math.sin(dLng / 2) * math.sin(dLng / 2);
+    final c = 2 * math.asin(math.sqrt(a));
+    return r * c;
+  }
+
+  /// Map a signal_db value to a color.
+  /// - Strong signal (-50 dBm or better) → green
+  /// - Medium (-60 dBm) → yellow
+  /// - Weak (-70 dBm or worse) → red
+  static Color _signalDbToColor(double signalDb) {
+    // Clamp to [-80, -50] range
+    final clamped = signalDb.clamp(-80.0, -50.0);
+    // Normalize: -80 → 0.0 (worst/red), -50 → 1.0 (best/green)
+    final t = (clamped + 80.0) / 30.0;
+    // Interpolate: red (0.0) → yellow (0.5) → green (1.0)
+    if (t < 0.5) {
+      // Red → Yellow
+      final u = t / 0.5; // 0.0 → 1.0
+      return Color.lerp(
+        const Color(0xFFD50000), // Red
+        const Color(0xFFFFEA00), // Yellow
+        u,
+      )!;
+    } else {
+      // Yellow → Green
+      final u = (t - 0.5) / 0.5; // 0.0 → 1.0
+      return Color.lerp(
+        const Color(0xFFFFEA00), // Yellow
+        const Color(0xFF00E676), // Green
+        u,
+      )!;
+    }
+  }
+
+  /// Build smooth heatmap grid polygons from the loaded grid points.
+  ///
+  /// Grid points that are farther than [_apCoverageRadiusM] from the nearest
+  /// AP are hidden (transparent). Points near APs are coloured by signal_db:
+  /// strong → green, medium → yellow, weak → red.
   List<Polygon> get _smoothHeatmapPolygons {
     if (_smoothHeatmapPoints.isEmpty) return [];
 
@@ -803,8 +854,31 @@ class _MapPageState extends State<MapPage> {
     return _smoothHeatmapPoints.map((point) {
       final lat = (point['lat'] as num).toDouble();
       final lng = (point['lng'] as num).toDouble();
-      final quality = point['signal_quality'] as String? ?? 'Fair';
-      final color = _signalColors[quality] ?? Colors.grey;
+      final signalDb = (point['signal_db'] as num?)?.toDouble() ?? -70.0;
+
+      // Find distance to nearest AP
+      double minDist = double.infinity;
+      for (final ap in _aps) {
+        final d = _haversineM(lat, lng, ap.lat, ap.lng);
+        if (d < minDist) minDist = d;
+      }
+
+      // If no AP is nearby, hide this grid cell
+      if (minDist > _apCoverageRadiusM) {
+        return Polygon(
+          points: [
+            LatLng(lat - halfLat, lng - halfLng),
+            LatLng(lat - halfLat, lng + halfLng),
+            LatLng(lat + halfLat, lng + halfLng),
+            LatLng(lat + halfLat, lng - halfLng),
+          ],
+          color: Colors.transparent,
+          borderColor: Colors.transparent,
+          borderStrokeWidth: 0,
+        );
+      }
+
+      final color = _signalDbToColor(signalDb);
 
       // Create a small rectangle polygon around each grid point
       return Polygon(
@@ -814,8 +888,8 @@ class _MapPageState extends State<MapPage> {
           LatLng(lat + halfLat, lng + halfLng),
           LatLng(lat + halfLat, lng - halfLng),
         ],
-        color: color.withValues(alpha: 0.35),
-        borderColor: color.withValues(alpha: 0.1),
+        color: color.withValues(alpha: 0.45),
+        borderColor: color.withValues(alpha: 0.15),
         borderStrokeWidth: 0.5,
       );
     }).toList();
