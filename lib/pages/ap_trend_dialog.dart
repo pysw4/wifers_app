@@ -238,9 +238,18 @@ class _APTrendDialogState extends State<APTrendDialog> {
                   ),
                 ),
                 // Toggle actual average overlay (only if data available)
+                // In bar mode, enabling average auto-switches to line mode
                 if (_accuracyVsActual != null && _accuracyVsActual!['hourly'] != null)
                   TextButton.icon(
-                    onPressed: () => setState(() => _showAverage = !_showAverage),
+                    onPressed: () {
+                      setState(() {
+                        _showAverage = !_showAverage;
+                        // Auto-switch to line chart when showing average
+                        if (_showAverage && _showBars) {
+                          _showBars = false;
+                        }
+                      });
+                    },
                     icon: Icon(
                       _showAverage ? Icons.visibility : Icons.visibility_off,
                       size: 18,
