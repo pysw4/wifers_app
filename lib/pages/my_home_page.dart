@@ -19,6 +19,7 @@ class _MyHomePageState extends State<MyHomePage> {
   int currentIndex = 0;
 
   // Global keys to access child states
+  final _favoritesPageKey = GlobalKey<FavoritesPageState>();
   final _recommendPageKey = GlobalKey<RecommendPageState>();
   final _bookingPageKey = GlobalKey<BookingPageState>();
 
@@ -74,6 +75,7 @@ class _MyHomePageState extends State<MyHomePage> {
         children: [
           const MapPage(),
           FavoritesPage(
+            key: _favoritesPageKey,
             onSwitchToMap: () {
               setState(() {
                 currentIndex = 0;
@@ -96,6 +98,9 @@ class _MyHomePageState extends State<MyHomePage> {
             currentIndex = index;
           });
           // Reload settings when switching between tabs
+          if (index == 1) {
+            _favoritesPageKey.currentState?.loadFavorites();
+          }
           if (index == 2) {
             _recommendPageKey.currentState?.reloadSettings();
           }

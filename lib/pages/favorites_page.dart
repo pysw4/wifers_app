@@ -13,10 +13,10 @@ class FavoritesPage extends StatefulWidget {
   const FavoritesPage({super.key, this.onSwitchToMap});
 
   @override
-  State<FavoritesPage> createState() => _FavoritesPageState();
+  FavoritesPageState createState() => FavoritesPageState();
 }
 
-class _FavoritesPageState extends State<FavoritesPage> {
+class FavoritesPageState extends State<FavoritesPage> {
   final ApiService _apiService = ApiService();
   List<APInfo> _favorites = [];
   bool _isLoading = true;
@@ -25,10 +25,10 @@ class _FavoritesPageState extends State<FavoritesPage> {
   @override
   void initState() {
     super.initState();
-    _loadFavorites();
+    loadFavorites();
   }
 
-  Future<void> _loadFavorites() async {
+  Future<void> loadFavorites() async {
     setState(() {
       _isLoading = true;
     });
@@ -194,8 +194,8 @@ class _FavoritesPageState extends State<FavoritesPage> {
                   ],
                 ),
               )
-            : RefreshIndicator(
-                onRefresh: _loadFavorites,
+              : RefreshIndicator(
+                onRefresh: loadFavorites,
                 child: ListView.builder(
                   padding: const EdgeInsets.all(16.0),
                   itemCount: _favorites.length,
