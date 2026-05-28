@@ -38,6 +38,7 @@ GEOJSON_PATH = BASE_DIR / 'geolocation_package' / 'data' / 'aps_geolocalizados_w
 SIGNAL_MODEL_PATH = BASE_DIR / 'models' / 'signal_strength_model.joblib'
 SIGNAL_META_PATH = BASE_DIR / 'models' / 'signal_strength_meta.joblib'
 BUILDING_ENCODER_PATH = BASE_DIR / 'models' / 'building_encoder.joblib'
+AP_NAME_ENCODER_PATH = BASE_DIR / 'models' / 'ap_name_encoder.joblib'
 OUTPUT_DIR = BASE_DIR / 'precomputed'
 
 UAB_bbox = 41.50736, 41.49505, 2.11543, 2.09491  # north, south, east, west
@@ -66,6 +67,11 @@ if SIGNAL_META_PATH.exists():
     meta = joblib.load(SIGNAL_META_PATH)
     buildings_list = meta.get('buildings', [])
     print(f"  Buildings list: {len(buildings_list)} buildings")
+
+ap_name_encoder = None
+if AP_NAME_ENCODER_PATH.exists():
+    ap_name_encoder = joblib.load(AP_NAME_ENCODER_PATH)
+    print(f"  AP name encoder loaded from {AP_NAME_ENCODER_PATH}")
 
 # =====================================================================
 # Load GeoJSON
@@ -130,12 +136,17 @@ print(f"  Predicting...")
 start_time = time.time()
 
 # Build feature matrix for each hour + day of week
-# Must match the 8 features the model was trained on:
-#   building_code, floor, hour, band, day_of_week, is_weekend, day_of_month, month
+# Features: building_code, floor, hour, band, day_of_week, is_weekend,
+#           day_of_month, month, ap_name_code
 for dow_idx, day_name in enumerate(DAY_NAMES):
     for hour in all_hours:
         rows = []
         for ap in ap_points_base:
+            # Encode AP name (use 0 if unknown to the encoder)
+            ap_name_code = 0
+            if ap_name_encoder is not None and ap['ap_name'] in ap_name_encoder.classes_:
+                ap_name_code = int(ap_name_encoder.transform([ap['ap_name']])[0])
+            
             rows.append({
                 'building_code': ap['building_code'],
                 'floor': ap['floor'],
@@ -145,23 +156,11 @@ for dow_idx, day_name in enumerate(DAY_NAMES):
                 'is_weekend': 1.0 if dow_idx >= 5 else 0.0,
                 'day_of_month': 15.0,  # 使用月中值作为默认
                 'month': 4.0,  # 使用4月（数据集中最常见的月份）
+                'ap_name_code': ap_name_code,
             })
         
         df = pd.DataFrame(rows)
         predictions = signal_model.predict(df)
-        
-        # Add per-AP offset so each AP has a unique signal value.
-        # The model only uses building_code + floor, so APs in the same
-        # building/floor get identical predictions. We use the AP name
-        # as a seed to generate a fixed offset per AP, making the heatmap
-        # visually more realistic and varied.
-        ap_offsets = []
-        for ap in ap_points_base:
-            # Deterministic offset based on AP name hash, range ±3 dBm
-            name_hash = hash(ap['ap_name']) & 0xFFFF
-            offset = (name_hash / 65535.0) * 6.0 - 3.0
-            ap_offsets.append(offset)
-        predictions = predictions + np.array(ap_offsets)
         
         # Write predictions back to ap_points_base
         key = f'{day_name}_h{hour}'
