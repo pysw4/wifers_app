@@ -43,6 +43,7 @@ from pydantic import BaseModel, Field, field_validator
 BASE_DIR = Path(__file__).resolve().parent
 MODELS_DIR = BASE_DIR / "models"
 PRECOMPUTED_DIR = BASE_DIR / "precomputed"
+TRENDS_DIR = PRECOMPUTED_DIR / "trends"
 GEOJSON_PATH = BASE_DIR / "geolocation_package" / "data" / "aps_geolocalizados_wgs84.geojson"
 
 DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -51,8 +52,7 @@ DAY_FULL_NAMES = {
     "thursday": "thu", "friday": "fri", "saturday": "sat", "sunday": "sun",
 }
 NIGHT_REPRESENTATIVE_HOUR = 3
-HEATMAP_CACHE_TTL = 3600
-TREND_CACHE_TTL = 1800
+TREND_FILE_TTL = 3600  # File cache TTL for trend results (seconds)
 
 app = FastAPI(title="Wifers App API", description="Backend API for Wi-Fi signal prediction and recommendation", version="3.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -66,12 +66,6 @@ _signal_strength_meta: Any = None
 _geojson_data: Optional[dict] = None
 _ap_index: Optional[list[dict]] = None
 _buildings_list: Optional[list[str]] = None
-_heatmap_cache: dict[str, dict] = {}
-_heatmap_cache_time: dict[str, float] = {}
-_trend_cache: dict[str, dict] = {}
-_trend_cache_time: dict[str, float] = {}
-_precomputed_trends: dict[str, dict] = {}
-_precomputed_trends_loaded: bool = False
 _ap_index_by_name: dict[str, dict] = {}
 
 # --- Routing graph (osmnx) ---
@@ -357,20 +351,12 @@ def _get_heatmap_filepath(day: str, hour: int) -> Path:
 
 
 def _load_heatmap_file(day: str, hour: int) -> dict:
-    cache_key = f"{day}_h{hour}"
-    now = time.time()
-    if cache_key in _heatmap_cache:
-        if now - _heatmap_cache_time.get(cache_key, 0) < HEATMAP_CACHE_TTL:
-            data = _heatmap_cache[cache_key]
-            data["hour"] = hour
-            return data
+    """Load heatmap from disk (no in-memory cache)."""
     filepath = _get_heatmap_filepath(day, hour)
     if not filepath.exists():
         raise HTTPException(status_code=404, detail=f"Heatmap not found for {day} hour {hour}")
     with open(filepath) as f:
         data = json.load(f)
-    _heatmap_cache[cache_key] = data
-    _heatmap_cache_time[cache_key] = now
     data["hour"] = hour
     return data
 
@@ -792,7 +778,7 @@ async def server_status():
         "geojson": _geojson_data is not None,
         "ap_index": _ap_index is not None,
     }
-    return {"status": "ok", "timestamp": time.time(), "model_version": "v3", "models": models_loaded, "cache": {"heatmap_entries": len(_heatmap_cache), "trend_entries": len(_trend_cache)}, "precomputed": {"days": DAY_NAMES, "hours": list(range(24)), "night_representative_hour": NIGHT_REPRESENTATIVE_HOUR}}
+    return {"status": "ok", "timestamp": time.time(), "model_version": "v3", "models": models_loaded, "cache": {"strategy": "no_in_memory_cache"}, "precomputed": {"days": DAY_NAMES, "hours": list(range(24)), "night_representative_hour": NIGHT_REPRESENTATIVE_HOUR}}
 
 
 @app.post("/predict")
@@ -869,11 +855,20 @@ async def get_buildings():
 
 @app.get("/predict/signal_strength/ap_trend/{ap_name:path}")
 async def get_ap_daily_trend(ap_name: str):
-    now = time.time()
     cache_key = ap_name.strip().lower()
-    if cache_key in _trend_cache:
-        if now - _trend_cache_time.get(cache_key, 0) < TREND_CACHE_TTL:
-            return _trend_cache[cache_key]
+    
+    # Try file cache first
+    trend_file = TRENDS_DIR / f"{cache_key}.json"
+    if trend_file.exists():
+        try:
+            with open(trend_file) as f:
+                cached = json.load(f)
+            if time.time() - cached.get("_cached_at", 0) < TREND_FILE_TTL:
+                # Strip internal metadata and return
+                return {k: v for k, v in cached.items() if not k.startswith("_")}
+        except Exception:
+            pass  # Treat corrupt file as cache miss
+    
     try:
         model = _load_signal_strength_model()
     except FileNotFoundError as e:
@@ -894,46 +889,35 @@ async def get_ap_daily_trend(ap_name: str):
     day_name = DAY_NAMES[int(day_of_week)]  # e.g. 'mon', 'tue', ..., 'sun'
     day_type = "weekend" if is_weekend else "weekday"
     
-    # Use precomputed trend if available (fast path - no model inference)
-    precomputed = _precomputed_trends.get(cache_key)
-    if precomputed is not None:
-        hourly_data = precomputed["trend"]
-        signal_values = [h["signal_db"] for h in hourly_data]
-        avg_db = precomputed["stats"]["avg_db"]
-        max_db = precomputed["stats"]["max_db"]
-        min_db = precomputed["stats"]["min_db"]
-        best_hour = precomputed["stats"]["best_hour"]
-        worst_hour = precomputed["stats"]["worst_hour"]
-    else:
-        # On-demand inference (fallback until precompute finishes)
-        ap_name_code = _encode_ap_name(ap_entry["name"])
-        rows = []
-        for hour in range(24):
-            rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=day_of_month, month=month, ap_name_code=ap_name_code))
-        df = pd.DataFrame(rows)
-        predictions = model.predict(df)
-        # Smooth raw predictions to reduce spikiness
-        smoothed = _smooth_series([float(p) for p in predictions], window=5)
-        hourly_data = []
-        signal_values = []
-        for hour, signal_db in enumerate(smoothed):
-            quality_info = _dbm_to_quality(float(signal_db))
-            status = _dbm_to_status(float(signal_db))
-            status_conf = _dbm_to_status_confidence(float(signal_db))
-            hourly_data.append({
-                "hour": hour,
-                "signal_db": round(float(signal_db), 1),
-                "signal_quality": quality_info["quality"],
-                "bars": quality_info["bars"],
-                "predicted_status": status,
-                "status_confidence": status_conf,
-            })
-            signal_values.append(round(float(signal_db), 1))
-        avg_db = sum(signal_values) / len(signal_values) if signal_values else 0
-        max_db = max(signal_values) if signal_values else 0
-        min_db = min(signal_values) if signal_values else 0
-        best_hour = signal_values.index(max_db) if signal_values else 0
-        worst_hour = signal_values.index(min_db) if signal_values else 0
+    # On-demand inference (no in-memory cache, just compute)
+    ap_name_code = _encode_ap_name(ap_entry["name"])
+    rows = []
+    for hour in range(24):
+        rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=day_of_month, month=month, ap_name_code=ap_name_code))
+    df = pd.DataFrame(rows)
+    predictions = model.predict(df)
+    # Smooth raw predictions to reduce spikiness
+    smoothed = _smooth_series([float(p) for p in predictions], window=5)
+    hourly_data = []
+    signal_values = []
+    for hour, signal_db in enumerate(smoothed):
+        quality_info = _dbm_to_quality(float(signal_db))
+        status = _dbm_to_status(float(signal_db))
+        status_conf = _dbm_to_status_confidence(float(signal_db))
+        hourly_data.append({
+            "hour": hour,
+            "signal_db": round(float(signal_db), 1),
+            "signal_quality": quality_info["quality"],
+            "bars": quality_info["bars"],
+            "predicted_status": status,
+            "status_confidence": status_conf,
+        })
+        signal_values.append(round(float(signal_db), 1))
+    avg_db = sum(signal_values) / len(signal_values) if signal_values else 0
+    max_db = max(signal_values) if signal_values else 0
+    min_db = min(signal_values) if signal_values else 0
+    best_hour = signal_values.index(max_db) if signal_values else 0
+    worst_hour = signal_values.index(min_db) if signal_values else 0
 
     # Calculate accuracy from feedback data if available
     ap_feedback = [f for f in _prediction_feedback if f["ap_name"].strip().lower() == cache_key]
@@ -1096,8 +1080,15 @@ async def get_ap_daily_trend(ap_name: str):
         "accuracy": accuracy_stats,
         "accuracy_vs_actual": accuracy_vs_actual,
     }
-    _trend_cache[cache_key] = result
-    _trend_cache_time[cache_key] = now
+    # Cache result to disk for future requests
+    try:
+        TRENDS_DIR.mkdir(parents=True, exist_ok=True)
+        cached_for_file = dict(result)
+        cached_for_file["_cached_at"] = time.time()
+        with open(trend_file, "w") as f:
+            json.dump(cached_for_file, f)
+    except Exception:
+        pass  # Non-critical write
     return result
 
 
@@ -1697,20 +1688,16 @@ async def booking_availability(room_code: str, date: str):
 @app.get("/cache/status")
 
 async def cache_status():
-    return {"heatmap_cache": {"entries": len(_heatmap_cache), "keys": list(_heatmap_cache.keys()), "ttl_seconds": HEATMAP_CACHE_TTL}, "trend_cache": {"entries": len(_trend_cache), "keys": list(_trend_cache.keys()), "ttl_seconds": TREND_CACHE_TTL}, "models_loaded": {"decision_tree_v3": _decision_tree_v3 is not None, "building_encoder": _building_encoder is not None, "signal_strength_model": _signal_strength_model is not None}, "ap_index_size": len(_ap_index) if _ap_index else 0, "buildings_count": len(_buildings_list) if _buildings_list else 0}
+    return {"strategy": "disk_based", "trend_file_ttl_seconds": TREND_FILE_TTL, "trend_files_count": len(list(TRENDS_DIR.glob("*.json"))) if TRENDS_DIR.exists() else 0, "models_loaded": {"decision_tree_v3": _decision_tree_v3 is not None, "building_encoder": _building_encoder is not None, "signal_strength_model": _signal_strength_model is not None}, "ap_index_size": len(_ap_index) if _ap_index else 0, "buildings_count": len(_buildings_list) if _buildings_list else 0}
 
 
 
 def _precompute_all_trends():
-    """Precompute trends for ALL APs at startup (background thread)."""
-    global _precomputed_trends, _precomputed_trends_loaded
-    if _precomputed_trends_loaded:
-        return
+    """Precompute trends for ALL APs at startup (background thread). Results go to disk, not RAM."""
     try:
         model = _load_signal_strength_model()
     except Exception as e:
         print(f"[WARN] Cannot precompute trends: {e}")
-        _precomputed_trends_loaded = True
         return
     ap_index = _build_ap_index()
     from datetime import datetime
@@ -1719,11 +1706,21 @@ def _precompute_all_trends():
     is_weekend = 1.0 if day_of_week >= 5 else 0.0
     day_of_month = float(today.day)
     month = float(today.month)
-    rows = []
-    ap_keys = []
+    
+    TRENDS_DIR.mkdir(parents=True, exist_ok=True)
+    
+    written = 0
     for ap in ap_index:
+        cache_key = ap["name"].strip().lower()
+        trend_file = TRENDS_DIR / f"{cache_key}.json"
+        if trend_file.exists():
+            continue  # Already cached
+        
         building_code = _encode_building(ap["building"])
         ap_name_code = _encode_ap_name(ap["name"])
+        
+        # Process one AP at a time to avoid huge DataFrame
+        rows = []
         for hour in range(24):
             rows.append(_build_signal_features(
                 building_code=building_code, floor=ap["floor"],
@@ -1731,31 +1728,35 @@ def _precompute_all_trends():
                 is_weekend=is_weekend, day_of_month=day_of_month,
                 month=month, ap_name_code=ap_name_code
             ))
-            ap_keys.append((ap["name"].strip().lower(), hour))
-    df = pd.DataFrame(rows)
-    predictions = model.predict(df)
-    from collections import defaultdict
-    ap_hourly = defaultdict(list)
-    for (ap_key, hour), pred in zip(ap_keys, predictions):
-        ap_hourly[ap_key].append((hour, float(pred)))
-    for ap_key, hourly_list in ap_hourly.items():
-        hourly_list.sort(key=lambda x: x[0])
-        signal_values = [h[1] for h in hourly_list]
-        # Apply smoothing to reduce spikiness in predicted trend
-        smoothed_values = _smooth_series(signal_values, window=5)
+        df = pd.DataFrame(rows)
+        predictions = model.predict(df)
+        smoothed_values = _smooth_series([float(p) for p in predictions], window=5)
+        
         hourly_data = []
-        for hour, signal_db in zip(range(24), smoothed_values):
+        signal_values = []
+        for hour, signal_db in enumerate(smoothed_values):
             quality_info = _dbm_to_quality(signal_db)
             status = _dbm_to_status(signal_db)
+            status_conf = _dbm_to_status_confidence(signal_db)
             hourly_data.append({
                 "hour": hour,
                 "signal_db": round(signal_db, 1),
                 "signal_quality": quality_info["quality"],
                 "bars": quality_info["bars"],
                 "predicted_status": status,
+                "status_confidence": status_conf,
             })
-        _precomputed_trends[ap_key] = {
+            signal_values.append(round(signal_db, 1))
+        
+        result = {
+            "ap_name": ap["name"],
+            "building": ap["building"],
+            "floor": int(ap["floor"]),
+            "lat": ap["lat"],
+            "lng": ap["lng"],
             "trend": hourly_data,
+            "day_type": "weekend" if is_weekend else "weekday",
+            "day_name": DAY_NAMES[int(day_of_week)],
             "stats": {
                 "avg_db": round(sum(smoothed_values) / len(smoothed_values), 1),
                 "max_db": round(max(smoothed_values), 1),
@@ -1763,9 +1764,16 @@ def _precompute_all_trends():
                 "best_hour": smoothed_values.index(max(smoothed_values)),
                 "worst_hour": smoothed_values.index(min(smoothed_values)),
             },
+            "_cached_at": time.time(),
         }
-    print(f"[INFO] Precomputed trends for {len(_precomputed_trends)} APs")
-    _precomputed_trends_loaded = True
+        try:
+            with open(trend_file, "w") as f:
+                json.dump(result, f)
+            written += 1
+        except Exception:
+            pass
+    
+    print(f"[INFO] Precomputed disk-cached trends for {written} APs ({len(ap_index) - written} already cached)")
 
 
 @app.on_event("startup")
