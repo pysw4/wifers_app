@@ -74,11 +74,19 @@ class _APTrendDialogState extends State<APTrendDialog> {
           .toList();
       setState(() {
         _trendData = trend;
-        // Use current date to determine day type and label
-        final now = DateTime.now();
-        final isWeekend = now.weekday == DateTime.saturday || now.weekday == DateTime.sunday;
-        _dayType = isWeekend ? 'weekend' : 'weekday';
-        _dayLabel = _getCurrentDayLabel();
+        // Use day_type and day_name from backend response
+        final backendDayType = data['day_type'] as String?;
+        final backendDayName = data['day_name'] as String?;
+        if (backendDayType != null && backendDayName != null) {
+          _dayType = backendDayType;
+          _dayLabel = _formatDayType(backendDayName);
+        } else {
+          // Fallback to current date if backend doesn't provide these
+          final now = DateTime.now();
+          final isWeekend = now.weekday == DateTime.saturday || now.weekday == DateTime.sunday;
+          _dayType = isWeekend ? 'weekend' : 'weekday';
+          _dayLabel = _getCurrentDayLabel();
+        }
         _stats = data['stats'] as Map<String, dynamic>? ?? {};
         _accuracy = data['accuracy'] as Map<String, dynamic>? ?? {};
         _accuracyVsActual = data['accuracy_vs_actual'] as Map<String, dynamic>?;
