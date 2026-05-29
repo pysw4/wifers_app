@@ -70,9 +70,6 @@ _heatmap_cache: dict[str, dict] = {}
 _heatmap_cache_time: dict[str, float] = {}
 _trend_cache: dict[str, dict] = {}
 _trend_cache_time: dict[str, float] = {}
-_precomputed_trends: dict[str, dict] = {}
-_precomputed_trends_loaded: bool = False
-_ap_index_by_name: dict[str, dict] = {}
 
 # --- Routing graph (osmnx) ---
 _route_graph: Optional[nx.MultiDiGraph] = None
@@ -291,12 +288,11 @@ def _load_geojson() -> dict:
 
 
 def _build_ap_index() -> list[dict]:
-    global _ap_index, _ap_index_by_name
+    global _ap_index
     if _ap_index is not None:
         return _ap_index
     geojson = _load_geojson()
     _ap_index = []
-    _ap_index_by_name = {}
     seen_ids = {}
     for feature in geojson["features"]:
         props = feature["properties"]
@@ -320,10 +316,6 @@ def _build_ap_index() -> list[dict]:
             "floor": float(props.get("Num_Planta", 0) or 0),
             "espacio": espacio,
         })
-        # Build O(1) lookup
-        ap_key = ap_name.strip().lower()
-        if ap_key not in _ap_index_by_name:
-            _ap_index_by_name[ap_key] = _ap_index[-1]
     return _ap_index
 
 
@@ -441,93 +433,6 @@ def _dbm_to_status_confidence(dbm: float) -> float:
     return round(confidence, 3)
 
 
-def _smooth_series(values: list, window: int = 3) -> list:
-    n = len(values)
-    if n < 3 or window < 3:
-        return list(values)
-    if window == 3:
-        weights = [0.25, 0.5, 0.25]
-    elif window == 5:
-        weights = [0.1, 0.2, 0.4, 0.2, 0.1]
-    else:
-        half = window // 2
-        weights = []
-        for i in range(window):
-            w = 1.0 - abs(i - half) / (half + 1)
-            weights.append(w)
-        total = sum(weights)
-        weights = [w / total for w in weights]
-    half = len(weights) // 2
-    smoothed = []
-    for i in range(n):
-        total_w = 0.0
-        total_v = 0.0
-        for j, w in enumerate(weights):
-            idx = i + j - half
-            if 0 <= idx < n:
-                total_w += w
-                total_v += w * values[idx]
-        smoothed.append(total_v / total_w if total_w > 0 else values[i])
-    return smoothed
-
-
-def _smooth_actual_hourly(hourly_dict: dict, min_samples: int = 20) -> dict:
-    if not hourly_dict:
-        return hourly_dict
-    raw_values = []
-    sample_counts = []
-    for h in range(24):
-        if h in hourly_dict:
-            raw_values.append(hourly_dict[h]["actual_mean"])
-            sample_counts.append(hourly_dict[h]["samples"])
-        else:
-            raw_values.append(None)
-            sample_counts.append(0)
-    filled = list(raw_values)
-    known_indices = [i for i, v in enumerate(filled) if v is not None]
-    if len(known_indices) >= 2:
-        for h in range(24):
-            if filled[h] is None:
-                before = [i for i in known_indices if i < h]
-                after = [i for i in known_indices if i > h]
-                if before and after:
-                    hb, ha = before[-1], after[0]
-                    ratio = (h - hb) / (ha - hb)
-                    filled[h] = filled[hb] + (filled[ha] - filled[hb]) * ratio
-                elif before:
-                    filled[h] = filled[before[-1]]
-                elif after:
-                    filled[h] = filled[after[0]]
-    elif len(known_indices) == 1:
-        v = filled[known_indices[0]]
-        filled = [v] * 24
-    smoothed_filled = list(filled)
-    for h in range(24):
-        if hourly_dict.get(h, {}).get("samples", 0) < min_samples and sample_counts[h] > 0:
-            neighbor_weight = min(0.8, 1.0 - sample_counts[h] / min_samples)
-            neighbor_sum = 0
-            neighbor_count = 0
-            for dh in [-2, -1, 1, 2]:
-                nh = h + dh
-                if 0 <= nh < 24 and filled[nh] is not None:
-                    neighbor_sum += filled[nh]
-                    neighbor_count += 1
-            if neighbor_count > 0:
-                neighbor_avg = neighbor_sum / neighbor_count
-                smoothed_filled[h] = filled[h] * (1 - neighbor_weight) + neighbor_avg * neighbor_weight
-    smoothed_values = _smooth_series(smoothed_filled, window=3)
-    smoothed_values = _smooth_series(smoothed_values, window=3)
-    result = {}
-    for h in range(24):
-        result[h] = {
-            "actual_mean": round(smoothed_values[h], 1),
-            "samples": sample_counts[h],
-            "interpolated": raw_values[h] is None,
-            "smoothed": sample_counts[h] < min_samples,
-        }
-    return result
-
-
 def _haversine_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     R = 6371000
     dlat = math.radians(lat2 - lat1)
@@ -552,9 +457,12 @@ def _build_v3_decision_features(hour: float, day_of_week: float, is_weekend: flo
 
 
 def _find_ap_in_index(ap_name: str) -> Optional[dict]:
-    _build_ap_index()
     cache_key = ap_name.strip().lower()
-    return _ap_index_by_name.get(cache_key)
+    ap_index = _build_ap_index()
+    for entry in ap_index:
+        if entry["name"].strip().lower() == cache_key:
+            return entry
+    return None
 
 
 def _predict_signal_for_ap(ap_entry: dict, hour: float, day_of_week: float, is_weekend: float, day_of_month: float, month: float) -> float:
@@ -823,13 +731,8 @@ async def predict_ap_status(request: PredictRequestV3):
 
     features = _build_v3_decision_features(hour=request.hour, day_of_week=request.day_of_week, is_weekend=request.is_weekend, day_of_month=request.day_of_month, month=request.month, building_code=building_code, floor=floor, lat=lat, lng=lng, predicted_signal_db=predicted_signal_db)
 
-    # Use DataFrame with proper column names to avoid sklearn feature name warnings
-    v3_feature_names = ['hour', 'day_of_week', 'is_weekend', 'month', 'day_of_month',
-                        'building_code', 'floor', 'lat', 'lng', 'predicted_signal_db']
-    features_df = pd.DataFrame(features, columns=v3_feature_names)
-
-    prediction = model.predict(features_df)[0]
-    probability = model.predict_proba(features_df)[0].tolist()
+    prediction = model.predict(features)[0]
+    probability = model.predict_proba(features)[0].tolist()
     confidence = max(probability)
 
     return {
@@ -895,46 +798,31 @@ async def get_ap_daily_trend(ap_name: str):
     day_name = DAY_NAMES[int(day_of_week)]  # e.g. 'mon', 'tue', ..., 'sun'
     day_type = "weekend" if is_weekend else "weekday"
     
-    # Use precomputed trend if available (fast path - no model inference)
-    precomputed = _precomputed_trends.get(cache_key)
-    if precomputed is not None:
-        hourly_data = precomputed["trend"]
-        signal_values = [h["signal_db"] for h in hourly_data]
-        avg_db = precomputed["stats"]["avg_db"]
-        max_db = precomputed["stats"]["max_db"]
-        min_db = precomputed["stats"]["min_db"]
-        best_hour = precomputed["stats"]["best_hour"]
-        worst_hour = precomputed["stats"]["worst_hour"]
-    else:
-        # On-demand inference (fallback until precompute finishes)
-        ap_name_code = _encode_ap_name(ap_entry["name"])
-        rows = []
-        for hour in range(24):
-            rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=day_of_month, month=month, ap_name_code=ap_name_code))
-        df = pd.DataFrame(rows)
-        predictions = model.predict(df)
-        # Smooth raw predictions to reduce spikiness
-        smoothed = _smooth_series([float(p) for p in predictions], window=5)
-        hourly_data = []
-        signal_values = []
-        for hour, signal_db in enumerate(smoothed):
-            quality_info = _dbm_to_quality(float(signal_db))
-            status = _dbm_to_status(float(signal_db))
-            status_conf = _dbm_to_status_confidence(float(signal_db))
-            hourly_data.append({
-                "hour": hour,
-                "signal_db": round(float(signal_db), 1),
-                "signal_quality": quality_info["quality"],
-                "bars": quality_info["bars"],
-                "predicted_status": status,
-                "status_confidence": status_conf,
-            })
-            signal_values.append(round(float(signal_db), 1))
-        avg_db = sum(signal_values) / len(signal_values) if signal_values else 0
-        max_db = max(signal_values) if signal_values else 0
-        min_db = min(signal_values) if signal_values else 0
-        best_hour = signal_values.index(max_db) if signal_values else 0
-        worst_hour = signal_values.index(min_db) if signal_values else 0
+    ap_name_code = _encode_ap_name(ap_entry["name"])
+    rows = []
+    for hour in range(24):
+        rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=day_of_month, month=month, ap_name_code=ap_name_code))
+    df = pd.DataFrame(rows)
+    predictions = model.predict(df)
+    hourly_data = []
+    for hour, signal_db in enumerate(predictions):
+        quality_info = _dbm_to_quality(float(signal_db))
+        status = _dbm_to_status(float(signal_db))
+        status_conf = _dbm_to_status_confidence(float(signal_db))
+        hourly_data.append({
+            "hour": hour,
+            "signal_db": round(float(signal_db), 1),
+            "signal_quality": quality_info["quality"],
+            "bars": quality_info["bars"],
+            "predicted_status": status,
+            "status_confidence": status_conf,
+        })
+    signal_values = [h["signal_db"] for h in hourly_data]
+    avg_db = sum(signal_values) / len(signal_values) if signal_values else 0
+    max_db = max(signal_values) if signal_values else 0
+    min_db = min(signal_values) if signal_values else 0
+    best_hour = signal_values.index(max_db) if signal_values else 0
+    worst_hour = signal_values.index(min_db) if signal_values else 0
 
     # Calculate accuracy from feedback data if available
     ap_feedback = [f for f in _prediction_feedback if f["ap_name"].strip().lower() == cache_key]
@@ -964,8 +852,7 @@ async def get_ap_daily_trend(ap_name: str):
     actual_data = _load_actual_signal_data().get(cache_key, {})
     accuracy_vs_actual = None
     if actual_data and actual_data.get("hourly"):
-        # Apply smoothing to actual measurements for a more stable comparison
-        hourly_actual = _smooth_actual_hourly(actual_data["hourly"], min_samples=20)
+        hourly_actual = actual_data["hourly"]
         
         # --- Interpolate missing hours to get a full 24-hour curve ---
         # Build a complete 0..23 array, filling gaps with linear interpolation
@@ -976,47 +863,44 @@ async def get_ap_daily_trend(ap_name: str):
         if len(actual_hours) >= 2:
             # Interpolate between known points
             for h in range(24):
-                try:
-                    if h in hourly_actual:
+                if h in hourly_actual:
+                    full_actual[h] = {
+                        "actual_mean": hourly_actual[h]["actual_mean"],
+                        "samples": hourly_actual[h]["samples"],
+                        "interpolated": False,
+                    }
+                else:
+                    # Find nearest known hours before and after
+                    before = [ah for ah in actual_hours if ah < h]
+                    after = [ah for ah in actual_hours if ah > h]
+                    
+                    if before and after:
+                        h_before = before[-1]
+                        h_after = after[0]
+                        v_before = hourly_actual[h_before]["actual_mean"]
+                        v_after = hourly_actual[h_after]["actual_mean"]
+                        # Linear interpolation
+                        ratio = (h - h_before) / (h_after - h_before)
+                        interpolated = v_before + (v_after - v_before) * ratio
                         full_actual[h] = {
-                            "actual_mean": hourly_actual[h]["actual_mean"],
-                            "samples": hourly_actual[h]["samples"],
-                            "interpolated": False,
+                            "actual_mean": round(interpolated, 1),
+                            "samples": 0,
+                            "interpolated": True,
                         }
-                    else:
-                        # Find nearest known hours before and after
-                        before = [ah for ah in actual_hours if ah < h]
-                        after = [ah for ah in actual_hours if ah > h]
-                        
-                        if before and after:
-                            h_before = before[-1]
-                            h_after = after[0]
-                            v_before = hourly_actual[h_before]["actual_mean"]
-                            v_after = hourly_actual[h_after]["actual_mean"]
-                            # Linear interpolation
-                            ratio = (h - h_before) / (h_after - h_before)
-                            interpolated = v_before + (v_after - v_before) * ratio
-                            full_actual[h] = {
-                                "actual_mean": round(interpolated, 1),
-                                "samples": 0,
-                                "interpolated": True,
-                            }
-                        elif before and not after:
-                            # Extrapolate from last known value (flat)
-                            full_actual[h] = {
-                                "actual_mean": hourly_actual[before[-1]]["actual_mean"],
-                                "samples": 0,
-                                "interpolated": True,
-                            }
-                        elif after and not before:
-                            # Extrapolate from first known value (flat)
-                            full_actual[h] = {
-                                "actual_mean": hourly_actual[after[0]]["actual_mean"],
-                                "samples": 0,
-                                "interpolated": True,
-                            }
-                except Exception:
-                    full_actual[h] = {"actual_mean": 0, "samples": 0, "interpolated": True}
+                    elif before and not after:
+                        # Extrapolate from last known value (flat)
+                        full_actual[h] = {
+                            "actual_mean": hourly_actual[before[-1]]["actual_mean"],
+                            "samples": 0,
+                            "interpolated": True,
+                        }
+                    elif after and not before:
+                        # Extrapolate from first known value (flat)
+                        full_actual[h] = {
+                            "actual_mean": hourly_actual[after[0]]["actual_mean"],
+                            "samples": 0,
+                            "interpolated": True,
+                        }
         elif len(actual_hours) == 1:
             # Only one hour known — use it for all hours
             single_h = actual_hours[0]
@@ -1292,10 +1176,8 @@ async def get_ap_trend_compare(ap_name: str):
             rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=15.0, month=4.0, ap_name_code=ap_name_code))
         df = pd.DataFrame(rows)
         predictions = model.predict(df)
-        # Smooth predictions
-        smoothed = _smooth_series([float(p) for p in predictions], window=5)
         result = []
-        for hour, signal_db in enumerate(smoothed):
+        for hour, signal_db in enumerate(predictions):
             quality_info = _dbm_to_quality(float(signal_db))
             result.append({"hour": hour, "signal_db": round(float(signal_db), 1), "signal_quality": quality_info["quality"], "bars": quality_info["bars"]})
         return result
@@ -1341,12 +1223,8 @@ async def recommend_aps(request: RecommendRequest):
     for i, ap in enumerate(nearby_aps):
         building_code = _encode_building(ap["building"])
         decision_rows.append(_build_v3_decision_features(hour=current_hour, day_of_week=current_day, is_weekend=is_weekend, day_of_month=current_day_of_month, month=current_month, building_code=building_code, floor=ap["floor"], lat=ap["lat"], lng=ap["lng"], predicted_signal_db=float(signal_predictions[i]))[0])
-    # Use DataFrame with proper column names to avoid sklearn feature name warnings
-    v3_feature_names = ['hour', 'day_of_week', 'is_weekend', 'month', 'day_of_month',
-                        'building_code', 'floor', 'lat', 'lng', 'predicted_signal_db']
-    decision_df = pd.DataFrame(decision_rows, columns=v3_feature_names)
-    status_predictions = decision_model.predict(decision_df)
-    status_probabilities = decision_model.predict_proba(decision_df)
+    status_predictions = decision_model.predict(decision_rows)
+    status_probabilities = decision_model.predict_proba(decision_rows)
     results = []
     for i, ap in enumerate(nearby_aps):
         signal_db = float(signal_predictions[i])
@@ -1699,83 +1577,6 @@ async def booking_availability(room_code: str, date: str):
 
 async def cache_status():
     return {"heatmap_cache": {"entries": len(_heatmap_cache), "keys": list(_heatmap_cache.keys()), "ttl_seconds": HEATMAP_CACHE_TTL}, "trend_cache": {"entries": len(_trend_cache), "keys": list(_trend_cache.keys()), "ttl_seconds": TREND_CACHE_TTL}, "models_loaded": {"decision_tree_v3": _decision_tree_v3 is not None, "building_encoder": _building_encoder is not None, "signal_strength_model": _signal_strength_model is not None}, "ap_index_size": len(_ap_index) if _ap_index else 0, "buildings_count": len(_buildings_list) if _buildings_list else 0}
-
-
-
-def _precompute_all_trends():
-    """Precompute trends for ALL APs at startup (background thread)."""
-    global _precomputed_trends, _precomputed_trends_loaded
-    if _precomputed_trends_loaded:
-        return
-    try:
-        model = _load_signal_strength_model()
-    except Exception as e:
-        print(f"[WARN] Cannot precompute trends: {e}")
-        _precomputed_trends_loaded = True
-        return
-    ap_index = _build_ap_index()
-    from datetime import datetime
-    today = datetime.now()
-    day_of_week = float(today.weekday())
-    is_weekend = 1.0 if day_of_week >= 5 else 0.0
-    day_of_month = float(today.day)
-    month = float(today.month)
-    rows = []
-    ap_keys = []
-    for ap in ap_index:
-        building_code = _encode_building(ap["building"])
-        ap_name_code = _encode_ap_name(ap["name"])
-        for hour in range(24):
-            rows.append(_build_signal_features(
-                building_code=building_code, floor=ap["floor"],
-                hour=float(hour), day_of_week=day_of_week,
-                is_weekend=is_weekend, day_of_month=day_of_month,
-                month=month, ap_name_code=ap_name_code
-            ))
-            ap_keys.append((ap["name"].strip().lower(), hour))
-    df = pd.DataFrame(rows)
-    predictions = model.predict(df)
-    from collections import defaultdict
-    ap_hourly = defaultdict(list)
-    for (ap_key, hour), pred in zip(ap_keys, predictions):
-        ap_hourly[ap_key].append((hour, float(pred)))
-    for ap_key, hourly_list in ap_hourly.items():
-        hourly_list.sort(key=lambda x: x[0])
-        signal_values = [h[1] for h in hourly_list]
-        # Apply smoothing to reduce spikiness in predicted trend
-        smoothed_values = _smooth_series(signal_values, window=5)
-        hourly_data = []
-        for hour, signal_db in zip(range(24), smoothed_values):
-            quality_info = _dbm_to_quality(signal_db)
-            status = _dbm_to_status(signal_db)
-            hourly_data.append({
-                "hour": hour,
-                "signal_db": round(signal_db, 1),
-                "signal_quality": quality_info["quality"],
-                "bars": quality_info["bars"],
-                "predicted_status": status,
-            })
-        _precomputed_trends[ap_key] = {
-            "trend": hourly_data,
-            "stats": {
-                "avg_db": round(sum(smoothed_values) / len(smoothed_values), 1),
-                "max_db": round(max(smoothed_values), 1),
-                "min_db": round(min(smoothed_values), 1),
-                "best_hour": smoothed_values.index(max(smoothed_values)),
-                "worst_hour": smoothed_values.index(min(smoothed_values)),
-            },
-        }
-    print(f"[INFO] Precomputed trends for {len(_precomputed_trends)} APs")
-    _precomputed_trends_loaded = True
-
-
-@app.on_event("startup")
-async def _startup_precompute():
-    """Precompute trends on startup in background thread."""
-    print("[INFO] Starting background trend precomputation...")
-    import threading
-    thread = threading.Thread(target=_precompute_all_trends, daemon=True)
-    thread.start()
 
 
 if __name__ == "__main__":

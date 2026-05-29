@@ -1,31 +1,10 @@
-# Task Progress: Translate Chinese comments/text to English
+# 任务进度
 
-- [x] Analyze all files for Chinese comments and text
-- [x] Fix `lib/pages/map_page.dart` - Chinese comments
-- [x] Fix `lib/pages/predictor_page.dart` - Chinese text in UI
-- [x] Fix `lib/pages/route_page.dart` - Chinese comments
-- [x] Fix `precompute_heatmaps.py` - Chinese comments
-- [x] Fix `retrain_classifier.py` - Chinese comments
-- [x] Fix `retrain_classifier_v3.py` - Chinese comments
-- [x] Fix `main.py` - Chinese comments
-- [x] Fix `helper_script.py` - Chinese comments
-- [x] Fix `train_signal_model.py` - Chinese comments
-- [x] Fix `predict.py` - Chinese comments
-- [x] Fix `predictor_lstm.py` - Chinese comments
-- [x] Fix `foto2ap_service.py` - Chinese comments
-- [x] Fix `precompute_actual_averages.py` - Chinese comments
-- [x] Fix `lib/services/api_service.dart` - Chinese comments
-- [x] Fix `lib/services/ap_data_service.dart` - Chinese comments
-- [x] Fix `lib/services/heatmap_asset_service.dart` - Chinese comments
-- [x] Fix `lib/services/foto2ap_service.dart` - Chinese comments
-- [x] Fix `lib/pages/my_home_page.dart` - Chinese comments
-- [x] Fix `lib/pages/booking_page.dart` - Chinese comments
-- [x] Fix `lib/pages/favorites_page.dart` - Chinese comments
-- [x] Fix `lib/pages/ap_trend_dialog.dart` - Chinese comments
-- [x] Fix `lib/pages/recommend_page.dart` - Chinese comments
-- [x] Fix `lib/pages/setting_page.dart` - Chinese comments
-- [x] Fix `lib/models/booking.dart` - Chinese comments
-- [x] Fix `lib/main.dart` - Chinese comments
-- [x] Update `PROJECT_ARCHITECTURE.md` - Sync with current codebase
-- [x] Update `README.md` - Sync with current codebase
-- [x] Final verification - no Chinese characters remain in any project files
+## 问题分析
+1. **热点地图AP预测值在16点后不准确**: 信号强度模型对傍晚/夜间预测偏差大
+2. **Trend平均值太跳脱(不平滑)**: 实际测量平均值(actual averages)数据点之间跳跃大，与预测值差异明显
+
+## 解决方案
+1. 对预测信号值应用移动平均平滑，使趋势更自然
+2. 对实际测量平均值应用平滑，减少跳脱感
+3. 对热力图数据应用平滑，改善16点后预测质量
