@@ -25,13 +25,6 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-import joblib
-from foto2ap_service import recognize_ap
-import numpy as np
-import networkx as nx
-import osmnx as ox
-import geopandas as gpd
-import pandas as pd
 import uvicorn
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -69,11 +62,12 @@ _buildings_list: Optional[list[str]] = None
 _ap_index_by_name: dict[str, dict] = {}
 
 # --- Routing graph (osmnx) ---
-_route_graph: Optional[nx.MultiDiGraph] = None
+_route_graph: Any = None
 _UAB_BBOX = (2.092, 41.492, 2.118, 41.514)  # (minx, miny, maxx, maxy)
 
-def _load_route_graph() -> nx.MultiDiGraph:
+def _load_route_graph() -> Any:
     """Load the UAB campus road graph from OSM. Returns pure road graph (no AP nodes)."""
+    import osmnx as ox
     global _route_graph
     if _route_graph is not None:
         return _route_graph
@@ -95,13 +89,10 @@ def _find_route_path(lat: float, lng: float, dest_lat: float, dest_lng: float, a
     """
     Find a walking path on the UAB campus road graph from (lat,lng) to (dest_lat,dest_lng).
     Uses Dijkstra shortest path on real roads.
-    
-    Approach:
-    1. Load the OSM road graph (G_road)
-    2. Find nearest road nodes to start and destination
-    3. Compute Dijkstra shortest path between them on the road graph
-    4. Return path coordinates + nearby APs as waypoints
     """
+    import osmnx as ox
+    import networkx as nx
+    
     G = _load_route_graph()
     
     # Find nearest road nodes to start and destination
@@ -200,6 +191,7 @@ def _load_actual_signal_data():
 
 
 def _load_decision_tree_v3():
+    import joblib
     global _decision_tree_v3, _decision_tree_v3_meta
     if _decision_tree_v3 is None:
         path = MODELS_DIR / "decision_tree_v3.joblib"
@@ -218,6 +210,7 @@ def _load_decision_tree_v3():
 
 
 def _load_building_encoder():
+    import joblib
     global _building_encoder
     if _building_encoder is None:
         path = MODELS_DIR / "building_encoder.joblib"
@@ -227,6 +220,7 @@ def _load_building_encoder():
 
 
 def _load_ap_name_encoder():
+    import joblib
     global _ap_name_encoder
     if _ap_name_encoder is None:
         path = MODELS_DIR / "ap_name_encoder.joblib"
@@ -255,6 +249,7 @@ def _encode_ap_name(ap_name: str) -> int:
 
 
 def _load_signal_strength_model():
+    import joblib
     global _signal_strength_model
     if _signal_strength_model is None:
         path = MODELS_DIR / "signal_strength_model.joblib"
@@ -265,11 +260,12 @@ def _load_signal_strength_model():
 
 
 def _load_signal_strength_meta():
+    from joblib import load as _jl_load
     global _signal_strength_meta
     if _signal_strength_meta is None:
         path = MODELS_DIR / "signal_strength_meta.joblib"
         if path.exists():
-            _signal_strength_meta = joblib.load(path)
+            _signal_strength_meta = _jl_load(path)
     return _signal_strength_meta or {}
 
 
@@ -543,6 +539,7 @@ def _find_ap_in_index(ap_name: str) -> Optional[dict]:
 
 
 def _predict_signal_for_ap(ap_entry: dict, hour: float, day_of_week: float, is_weekend: float, day_of_month: float, month: float) -> float:
+    import pandas as pd
     model = _load_signal_strength_model()
     building_code = _encode_building(ap_entry["building"])
     ap_name_code = _encode_ap_name(ap_entry["name"])
@@ -629,6 +626,8 @@ def _predict_booking_performance(room_code: str, date_str: str, start_hour: int,
     building_code = _encode_building(ap_entry["building"])
     ap_name_code = _encode_ap_name(ap_entry["name"])
     hours = list(range(start_hour, end_hour))
+
+    import pandas as pd
 
     predictions = []
     for h in hours:
@@ -808,6 +807,7 @@ async def predict_ap_status(request: PredictRequestV3):
 
     features = _build_v3_decision_features(hour=request.hour, day_of_week=request.day_of_week, is_weekend=request.is_weekend, day_of_month=request.day_of_month, month=request.month, building_code=building_code, floor=floor, lat=lat, lng=lng, predicted_signal_db=predicted_signal_db)
 
+    import pandas as pd
     # Use DataFrame with proper column names to avoid sklearn feature name warnings
     v3_feature_names = ['hour', 'day_of_week', 'is_weekend', 'month', 'day_of_month',
                         'building_code', 'floor', 'lat', 'lng', 'predicted_signal_db']
@@ -890,6 +890,7 @@ async def get_ap_daily_trend(ap_name: str):
     day_type = "weekend" if is_weekend else "weekday"
     
     # On-demand inference (no in-memory cache, just compute)
+    import pandas as pd
     ap_name_code = _encode_ap_name(ap_entry["name"])
     rows = []
     for hour in range(24):
@@ -1185,6 +1186,7 @@ async def get_ap_signal_accuracy(ap_name: str):
             "message": "AP not found in GeoJSON database.",
         }
     
+    import pandas as pd
     building_code = _encode_building(ap_entry["building"])
     ap_name_code = _encode_ap_name(ap_entry["name"])
     rows = []
@@ -1277,6 +1279,7 @@ async def get_ap_trend_compare(ap_name: str):
     ap_name_code = _encode_ap_name(ap_entry["name"])
 
     def _predict_for_day(day_of_week: float, is_weekend: float) -> list:
+        import pandas as pd
         rows = []
         for hour in range(24):
             rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=15.0, month=4.0, ap_name_code=ap_name_code))
@@ -1320,6 +1323,7 @@ async def recommend_aps(request: RecommendRequest):
         nearby_aps.append(ap)
     if not nearby_aps:
         return {"recommendations": [], "message": "No APs found in the specified area"}
+    import pandas as pd
     signal_rows = []
     for ap in nearby_aps:
         building_code = _encode_building(ap["building"])
@@ -1404,6 +1408,7 @@ async def foto2ap_recognize(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="Failed to read uploaded file")
 
     try:
+        from foto2ap_service import recognize_ap
         result = recognize_ap(image_bytes)
     except ImportError as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -1694,6 +1699,7 @@ async def cache_status():
 
 def _precompute_all_trends():
     """Precompute trends for ALL APs at startup (background thread). Results go to disk, not RAM."""
+    import pandas as pd
     try:
         model = _load_signal_strength_model()
     except Exception as e:
