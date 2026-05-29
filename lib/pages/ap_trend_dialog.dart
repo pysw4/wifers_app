@@ -538,16 +538,17 @@ class _APTrendDialogState extends State<APTrendDialog> {
       return FlSpot(hour, db);
     }).toList();
 
-    // Build bar chart data
+    // Build bar chart data — uses signal_db (dBm) shifted by +100 for positive display
     final barData = validData.map((d) {
       final hour = (d['hour'] as num).toDouble();
-      final bars = (d['bars'] as num?)?.toDouble() ?? 0;
+      final signalDb = (d['signal_db'] as num).toDouble();
+      final barValue = signalDb + 100;
       return BarChartGroupData(
         x: hour.toInt(),
         barRods: [
           BarChartRodData(
-            toY: bars,
-            color: _dbmToColor((d['signal_db'] as num).toDouble()).withValues(alpha: 0.6),
+            toY: barValue.clamp(0, 100),
+            color: _dbmToColor(signalDb).withValues(alpha: 0.6),
             width: 6,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(2)),
           ),
@@ -572,11 +573,12 @@ class _APTrendDialogState extends State<APTrendDialog> {
             leftTitles: AxisTitles(
               sideTitles: SideTitles(
                 showTitles: true,
-                reservedSize: 20,
-                interval: 1,
+                reservedSize: 36,
+                interval: 10,
                 getTitlesWidget: (value, meta) {
+                  final dbm = value.toInt() - 100;
                   return Text(
-                    '${value.toInt()}',
+                    '$dbm',
                     style: const TextStyle(fontSize: 9),
                   );
                 },
@@ -622,7 +624,8 @@ class _APTrendDialogState extends State<APTrendDialog> {
                       if ((entry['hour'] as num).toInt() == group.x) {
                         final actualDb = (entry['actual_mean'] as num).toDouble();
                         final diff = (entry['diff'] as num).toDouble();
-                        actualStr = '\nAvg: ${actualDb.toStringAsFixed(1)} dBm\nDiff: ${diff.toStringAsFixed(1)} dBm';
+                        final interp = entry['interpolated'] == true ? ' (interpolated)' : '';
+                        actualStr = '\nAvg: ${actualDb.toStringAsFixed(1)} dBm$interp\nDiff: ${diff.toStringAsFixed(1)} dBm';
                         break;
                       }
                     }
@@ -769,7 +772,8 @@ class _APTrendDialogState extends State<APTrendDialog> {
                       if ((entry['hour'] as num).toInt() == spot.x.toInt()) {
                         final actualDb = (entry['actual_mean'] as num).toDouble();
                         final diff = (entry['diff'] as num).toDouble();
-                        actualStr = '\nAvg: ${actualDb.toStringAsFixed(1)} dBm\nDiff: ${diff.toStringAsFixed(1)} dBm';
+                        final interp = entry['interpolated'] == true ? ' (interpolated)' : '';
+                        actualStr = '\nAvg: ${actualDb.toStringAsFixed(1)} dBm$interp\nDiff: ${diff.toStringAsFixed(1)} dBm';
                         break;
                       }
                     }

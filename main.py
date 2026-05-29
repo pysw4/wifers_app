@@ -798,9 +798,10 @@ async def get_ap_daily_trend(ap_name: str):
     day_name = DAY_NAMES[int(day_of_week)]  # e.g. 'mon', 'tue', ..., 'sun'
     day_type = "weekend" if is_weekend else "weekday"
     
+    ap_name_code = _encode_ap_name(ap_entry["name"])
     rows = []
     for hour in range(24):
-        rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=day_of_month, month=month))
+        rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=day_of_month, month=month, ap_name_code=ap_name_code))
     df = pd.DataFrame(rows)
     predictions = model.predict(df)
     hourly_data = []
@@ -1079,12 +1080,13 @@ async def get_ap_signal_accuracy(ap_name: str):
         }
     
     building_code = _encode_building(ap_entry["building"])
+    ap_name_code = _encode_ap_name(ap_entry["name"])
     rows = []
     for hour in range(24):
         rows.append(_build_signal_features(
             building_code=building_code, floor=ap_entry["floor"],
             hour=float(hour), day_of_week=0.0, is_weekend=0.0,
-            day_of_month=15.0, month=4.0
+            day_of_month=15.0, month=4.0, ap_name_code=ap_name_code
         ))
     df = pd.DataFrame(rows)
     predictions = model.predict(df)
@@ -1166,11 +1168,12 @@ async def get_ap_trend_compare(ap_name: str):
     building = ap_entry["building"]
     floor = ap_entry["floor"]
     building_code = _encode_building(building)
+    ap_name_code = _encode_ap_name(ap_entry["name"])
 
     def _predict_for_day(day_of_week: float, is_weekend: float) -> list:
         rows = []
         for hour in range(24):
-            rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=15.0, month=4.0))
+            rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=15.0, month=4.0, ap_name_code=ap_name_code))
         df = pd.DataFrame(rows)
         predictions = model.predict(df)
         result = []
