@@ -5,7 +5,6 @@ import 'package:wifers_app/services/storage_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/api_service.dart';
 import 'package:wifers_app/pages/route_page.dart';
-import 'package:wifers_app/pages/predictor_page.dart';
 
 class _PredictionDialog extends StatefulWidget {
   final APInfo ap;
@@ -289,13 +288,38 @@ class FavoritesPageState extends State<FavoritesPage> {
           ),
         );
         if (startFromGate != true) return;
-        // Navigate from campus gate
-        final gatePath = await _apiService.fetchRoute(
+        // Navigate from campus gate (use advanced route for alternatives)
+        final routeResult = await _apiService.fetchAdvancedRoute(
           LocationService.campusGateLng,
           LocationService.campusGateLat,
           ap.lng,
           ap.lat,
+          acceptableRange: 500,
         );
+        final pathData = routeResult['path'] as List<dynamic>;
+        final gatePath = pathData.map<LatLng>((item) {
+          return LatLng(
+            (item['lat'] as num).toDouble(),
+            (item['lng'] as num).toDouble(),
+          );
+        }).toList();
+        
+        final alternativesData = routeResult['alternatives'] as List<dynamic>? ?? [];
+        final alternatives = <RouteAlternative>[];
+        for (var altData in alternativesData) {
+          final altPathData = altData['path'] as List<dynamic>;
+          final altPath = altPathData.map<LatLng>((item) {
+            return LatLng(
+              (item['lat'] as num).toDouble(),
+              (item['lng'] as num).toDouble(),
+            );
+          }).toList();
+          alternatives.add(RouteAlternative(
+            path: altPath,
+            distance: (altData['distance'] as num).toDouble(),
+          ));
+        }
+        
         if (gatePath.isNotEmpty && mounted) {
           Navigator.push(
             context,
@@ -303,6 +327,8 @@ class FavoritesPageState extends State<FavoritesPage> {
               builder: (context) => RoutePage(
                 path: gatePath,
                 title: 'Navigate to ${ap.name ?? 'AP'} (from Gate)',
+                alternatives: alternatives,
+                totalDistance: (routeResult['distance'] as num?)?.toDouble(),
               ),
             ),
           );
@@ -310,12 +336,36 @@ class FavoritesPageState extends State<FavoritesPage> {
         return;
       }
 
-      final path = await _apiService.fetchRoute(
+      final routeResult = await _apiService.fetchAdvancedRoute(
         position.longitude,
         position.latitude,
         ap.lng,
         ap.lat,
+        acceptableRange: 500,
       );
+      final pathData = routeResult['path'] as List<dynamic>;
+      final path = pathData.map<LatLng>((item) {
+        return LatLng(
+          (item['lat'] as num).toDouble(),
+          (item['lng'] as num).toDouble(),
+        );
+      }).toList();
+      
+      final alternativesData = routeResult['alternatives'] as List<dynamic>? ?? [];
+      final alternatives = <RouteAlternative>[];
+      for (var altData in alternativesData) {
+        final altPathData = altData['path'] as List<dynamic>;
+        final altPath = altPathData.map<LatLng>((item) {
+          return LatLng(
+            (item['lat'] as num).toDouble(),
+            (item['lng'] as num).toDouble(),
+          );
+        }).toList();
+        alternatives.add(RouteAlternative(
+          path: altPath,
+          distance: (altData['distance'] as num).toDouble(),
+        ));
+      }
 
       if (path.isNotEmpty && mounted) {
         Navigator.push(
@@ -324,6 +374,8 @@ class FavoritesPageState extends State<FavoritesPage> {
             builder: (context) => RoutePage(
               path: path,
               title: 'Navigate to ${ap.name ?? 'AP'}',
+              alternatives: alternatives,
+              totalDistance: (routeResult['distance'] as num?)?.toDouble(),
             ),
           ),
         );

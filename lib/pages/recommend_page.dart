@@ -378,7 +378,15 @@ class RecommendPageState extends State<RecommendPage> {
                             const DropdownMenuItem(value: '', child: Text('All buildings', style: TextStyle(fontSize: 14))),
                             ..._buildings.map((b) => DropdownMenuItem(value: b, child: Text(b, style: const TextStyle(fontSize: 14)))),
                           ],
-                          onChanged: (v) { if (v != null) { setState(() => _building = v); _saveBuilding(v); } },
+                          onChanged: (v) {
+                if (v != null) {
+                  setState(() => _building = v);
+                  _saveBuilding(v);
+                  // Auto-search when a building is selected
+                  _getRecommendation();
+                }
+              },
+
                         ),
                       ),
                     ),

@@ -247,10 +247,27 @@ def recognize_ap(image_bytes: bytes) -> Optional[dict]:
         return None
 
     # 3. Extract texts from PaddleOCR output
-    rec_texts = result[0].get("rec_texts", [])
+    # PaddleOCR returns: [ [ [[x1,y1],...], (text, score) ], ... ]
+    # result[0] is a list of per-detection results, each being:
+    #   [ [bbox_coords], (text, score) ]
+    rec_texts = []
+    raw_detections = result[0] if isinstance(result[0], list) else []
+    for det in raw_detections:
+        if isinstance(det, (list, tuple)) and len(det) >= 2:
+            text_score = det[1]
+            if isinstance(text_score, (list, tuple)) and len(text_score) >= 1:
+                rec_texts.append(str(text_score[0]))
     if not rec_texts:
-        # Fallback: try tuple format [(box, (text, score)), ...]
-        rec_texts = [item[1][0] for item in result[0] if isinstance(item, (list, tuple)) and len(item) >= 2]
+        # Fallback: try dict format (some PaddleOCR versions)
+        try:
+            rec_texts = result[0].get("rec_texts", [])
+        except AttributeError:
+            pass
+    if not rec_texts:
+        # Last resort: try flat list of strings
+        for det in raw_detections:
+            if isinstance(det, str):
+                rec_texts.append(det)
 
     if not rec_texts:
         return None

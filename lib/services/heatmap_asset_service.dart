@@ -8,15 +8,8 @@ import 'package:http/http.dart' as http;
 /// Files are stored in web/heatmaps/{day}/heatmap_h{hour}.json
 /// and served from the same origin as the Flutter web app.
 class HeatmapAssetService {
-  /// Base URL for heatmap static files.
-  /// Uses the same host as the Flutter web app itself (relative path).
-  static String get _baseUrl {
-    // Use relative path so it works in both development and production
-    // (same origin as the Flutter web app)
-    return '';
-  }
-
   /// Load heatmap data for a given day and hour from static files.
+
   ///
   /// Falls back to the API service if the static file is not available.
   static Future<Map<String, dynamic>> loadHeatmap({

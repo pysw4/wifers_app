@@ -828,14 +828,12 @@ class _MapPageState extends State<MapPage> {
 
   void _showAPOptions(APInfo ap, {double? signalDb}) async {
     String predictedStatus = 'unknown';
-    String? apiError;
     try {
       // v3 API: send ap_name + current time features for status prediction
       final now = DateTime.now();
       final weekday = now.weekday; // 1=Mon, 7=Sun
       final apName = ap.name?.trim() ?? '';
       if (apName.isEmpty) {
-        apiError = 'AP name is empty';
         predictedStatus = 'error';
       } else {
         final result = await _apiService.predictAPStatus({
@@ -850,8 +848,8 @@ class _MapPageState extends State<MapPage> {
       }
     } catch (e) {
       predictedStatus = 'error';
-      apiError = e.toString();
     }
+
 
     final color = predictedStatus == 'Up'
         ? Colors.green
@@ -1089,7 +1087,7 @@ class _MapPageState extends State<MapPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error fetching route: $e')),
+        SnackBar(content: Text(ApiService.friendlyErrorMessage(e))),
       );
     }
   }
@@ -1154,7 +1152,7 @@ class _MapPageState extends State<MapPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error fetching route from gate: $e')),
+        SnackBar(content: Text(ApiService.friendlyErrorMessage(e))),
       );
     }
   }

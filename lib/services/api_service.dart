@@ -15,10 +15,29 @@ class ApiException implements Exception {
 
 class ApiService {
   static const String baseUrl = 'https://wifers-app-api.onrender.com';
+  static const Duration _timeout = Duration(seconds: 30);
+
+  /// Friendly user-facing message for common HTTP errors.
+  static String friendlyErrorMessage(dynamic error) {
+    final msg = error.toString();
+    if (msg.contains('502') || msg.contains('Bad Gateway')) {
+      return '服务器暂时不可用，请稍后重试 ⏳';
+    }
+    if (msg.contains('timeout') || msg.contains('TimedOut')) {
+      return '请求超时，请检查网络连接 ⌛';
+    }
+    if (msg.contains('Connection refused')) {
+      return '无法连接服务器，请稍后重试 🔌';
+    }
+    if (msg.contains('No address')) {
+      return '无法解析服务器地址，请检查网络连接 🌐';
+    }
+    return msg;
+  }
 
   Future<dynamic> _get(String path, [Map<String, String>? params]) async {
     final uri = Uri.parse('$baseUrl/$path').replace(queryParameters: params);
-    final response = await http.get(uri);
+    final response = await http.get(uri).timeout(_timeout);
     if (response.statusCode == 200) return jsonDecode(response.body);
     if (response.statusCode == 422) {
       final detail = jsonDecode(response.body);
@@ -36,7 +55,7 @@ class ApiService {
       Uri.parse('$baseUrl/$path'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode(body),
-    );
+    ).timeout(_timeout);
     if (response.statusCode == 200) return jsonDecode(response.body);
     if (response.statusCode == 422) {
       final detail = jsonDecode(response.body);
@@ -208,6 +227,4 @@ class ApiService {
         'n_students': nStudents,
         'min_performance': minPerformance,
       }) as Map<String, dynamic>;
-
 }
-
