@@ -86,8 +86,7 @@ def _load_route_graph() -> nx.MultiDiGraph:
     print("[INFO] Loading UAB campus road graph from OSM...")
     try:
         G = ox.graph_from_bbox(
-            north=_UAB_BBOX[3], south=_UAB_BBOX[1],
-            east=_UAB_BBOX[2], west=_UAB_BBOX[0],
+            bbox=_UAB_BBOX,
             network_type="walk",
             simplify=True,
         )
