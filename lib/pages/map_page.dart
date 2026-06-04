@@ -10,7 +10,6 @@ import 'package:wifers_app/services/ap_data_service.dart';
 import 'package:wifers_app/services/heatmap_asset_service.dart';
 import 'package:wifers_app/services/location_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
-import 'package:wifers_app/services/cache_service.dart';
 import 'package:wifers_app/services/foto2ap_service.dart';
 import 'package:wifers_app/models/ap_info.dart';
 import 'package:wifers_app/pages/route_page.dart';
@@ -654,6 +653,10 @@ class _MapPageState extends State<MapPage> {
     }
   }
 
+  /// In-memory heatmap cache (avoids SharedPreferences/localStorage quota issues
+  /// on web — heatmap JSON is often too large for the ~5 MB limit).
+  final Map<String, Map<String, dynamic>> _heatmapMemoryCache = {};
+
   Future<void> _loadHeatmap() async {
     if (_isLoadingHeatmap) return;
 
@@ -665,23 +668,24 @@ class _MapPageState extends State<MapPage> {
       // Build cache key (include day for 7-day support)
       // v2: resolution 100 (100x100 grid)
       final cacheKey = 'heatmap_v2_${_currentDayApiName}_$_selectedHour';
-      const heatmapTtl = Duration(minutes: 30);
 
-      // Try cache first
-      final cachedData = await CacheService.get<Map<String, dynamic>>(cacheKey, ttl: heatmapTtl);
-      if (cachedData != null) {
-        _processHeatmapData(cachedData);
-        debugPrint('Loaded heatmap data (cached)');
+      // 1) Try in-memory cache first (avoids re-parsing the same data)
+      final memCached = _heatmapMemoryCache[cacheKey];
+      if (memCached != null) {
+        _processHeatmapData(memCached);
+        debugPrint('Loaded heatmap data (memory cache)');
         return;
       }
 
-      // Try loading from static files first (avoids API cold start / quota)
+      // 2) Try loading from static files first (avoids API cold start / quota)
       try {
         final staticData = await HeatmapAssetService.loadHeatmap(
           hour: _selectedHour,
           day: _currentDayApiName,
         );
-        await CacheService.set(cacheKey, staticData);
+        // Save to memory cache only — not to SharedPreferences/localeStorage,
+        // because heatmap JSON is too large for the ~5 MB quota.
+        _heatmapMemoryCache[cacheKey] = staticData;
         _processHeatmapData(staticData);
         debugPrint('Loaded heatmap from static file');
         return;
@@ -689,14 +693,14 @@ class _MapPageState extends State<MapPage> {
         debugPrint('Static heatmap load failed, falling back to API: $staticError');
       }
 
-      // Fallback: load from API
+      // 3) Fallback: load from API
       final data = await _apiService.getSignalHeatmap(
         hour: _selectedHour,
         day: _currentDayApiName,
       );
 
-      // Save to cache
-      await CacheService.set(cacheKey, data);
+      // Memory cache only (see above)
+      _heatmapMemoryCache[cacheKey] = data;
       _processHeatmapData(data);
     } catch (e) {
       setState(() {
