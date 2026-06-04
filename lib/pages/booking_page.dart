@@ -44,7 +44,7 @@ class BookingPageState extends State<BookingPage> {
   List<HourAvailability> _availabilityHours = [];
   bool _availabilityLoading = false;
 
-  static const _perfOptions = ['Fair', 'Good', 'Excellent'];
+  static const _perfOptions = ['Poor', 'Fair', 'Good', 'Excellent', 'Excellent+', 'Excellent++'];
   static const _perfColors = {
     'Very Poor': Colors.red,
     'Weak': Colors.deepOrange,

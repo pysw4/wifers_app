@@ -1949,7 +1949,7 @@ class BookingCreateRequest(BaseModel):
     start_hour: int = Field(ge=7, le=22)
     end_hour: int = Field(ge=8, le=23)
     n_students: int = Field(ge=1, le=200)
-    min_performance: str = Field(default="Fair", pattern="^(Fair|Good|Excellent)$")
+    min_performance: str = Field(default="Fair", pattern="^(Poor|Fair|Good|Excellent|Excellent\\+|Excellent\\+\\+)$")
 
 
 class BookingCancelRequest(BaseModel):
@@ -1977,7 +1977,7 @@ class BookingAlternativesRequest(BaseModel):
     start_hour: int = Field(ge=7, le=22)
     end_hour: int = Field(ge=8, le=23)
     n_students: int = Field(ge=1, le=200)
-    min_performance: str = Field(default="Fair", pattern="^(Fair|Good|Excellent)$")
+    min_performance: str = Field(default="Fair", pattern="^(Poor|Fair|Good|Excellent|Excellent\\+|Excellent\\+\\+)$")
 
 
 @app.post("/booking/create")

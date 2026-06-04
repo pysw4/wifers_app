@@ -11,7 +11,7 @@ with an overload penalty for high student counts.
 import pandas as pd
 import numpy as np
 
-PERF_RANK = {'Critical': 0, 'Poor': 1, 'Fair': 2, 'Good': 3,
+PERF_RANK = {'Very Poor': 0, 'Weak': 1, 'Poor': 1, 'Fair': 2, 'Good': 3,
              'Excellent': 4, 'Excellent+': 5, 'Excellent++': 6}
 
 SCORE_THRESHOLDS = [

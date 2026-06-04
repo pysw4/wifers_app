@@ -35,7 +35,7 @@ df_clean = load_data()
 geo      = load_geo()
 
 
-PERF_RANK = {'Critical':0, 'Poor':1, 'Fair':2, 'Good':3, 
+PERF_RANK = {'Very Poor':0, 'Weak':1, 'Poor':1, 'Fair':2, 'Good':3, 
              'Excellent':4, 'Excellent+':5, 'Excellent++':6}
 room_to_ap = (
     geo[['USER_Espai', 'USER_NOM_A', 'USER_EDIFI', 'Num_Planta']]
@@ -105,19 +105,6 @@ def get_bookings_teacher(bookings, teacher_id):
     return [book for book in bookings if book['teacher_id'] ==teacher_id]
 
 def predict_for_room(room_code, date,start_hour,end_hour, n_students, df_clean):
-    # as the prediction only works well till the 5 hours:
-    booking_dt = datetime.strptime(f"{date} {start_hour:02d}:00", "%Y-%m-%d %H:%M")
-    hours_until = (booking_dt - datetime.now()).total_seconds() / 3600
-
-    if hours_until > 5:
-        return {
-            'ap_name':     get_ap(room_code)['ap_name'],
-            'performance': None,
-            'predictions': None,
-            'warning':     f"Prediction not available — booking is {hours_until:.0f}h away (max 5h)"
-        }
-
-
     ap_info = get_ap(room_code)
     if ap_info is None:
         return None
@@ -266,7 +253,8 @@ start_hour  = st.selectbox("Start", range(7, 22), format_func=lambda h: f"{h:02d
 end_hour    = st.selectbox("End",   range(8, 23), format_func=lambda h: f"{h:02d}:00")
 n_students  = st.slider("Students", 1, 120, 30)
 min_perf    = st.selectbox("Minimum acceptable performance", 
-                            ['Fair', 'Good', 'Excellent'])
+                            ['Poor', 'Fair', 'Good', 'Excellent', 'Excellent+', 'Excellent++'],
+                            index=2)  # default 'Good'
 
 # apply suggested slot if one has chosen
 if st.session_state.best_slot:
