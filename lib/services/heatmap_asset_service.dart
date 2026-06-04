@@ -17,7 +17,7 @@ class HeatmapAssetService {
     required String day,
   }) async {
     final effectiveHour = hour < 7 ? 3 : hour; // Match backend's NIGHT_REPRESENTATIVE_HOUR
-    final url = '/heatmaps/$day/heatmap_h$effectiveHour.json';
+    final url = 'heatmaps/$day/heatmap_h$effectiveHour.json';
 
     try {
       final response = await http.get(Uri.parse(url));
