@@ -57,3 +57,6 @@ train_signal_model_v2.py
 
 # Deployment config
 description.txt
+meme_clean.parquet
+.ipynb_checkpoints/
+Foto2AP/ap_images/

@@ -18,12 +18,18 @@ if 'best_slot' not in st.session_state:
 #DATA
 @st.cache_data
 def load_data():
-    df = pd.read_parquet(r"")
+    # 注意: 请将路径替换为实际 parquet 文件路径
+    df = pd.read_parquet(r"../meme_clean.parquet")
+    # 预处理：缓存 dayofweek，避免每次查询重新解析 timestamp
+    df['dayofweek'] = pd.to_datetime(df['timestamp']).dt.dayofweek
+    # 预处理：strip associated_device_name 中的空白
+    df['associated_device_name'] = df['associated_device_name'].str.strip()
     return df
 
 @st.cache_data
 def load_geo():
-    return gpd.read_file(r'')
+    # 注意: 请将路径替换为实际 geojson 文件路径
+    return gpd.read_file(r'../geolocation_package/data/aps_geolocalizados_wgs84.geojson')
 
 df_clean = load_data()
 geo      = load_geo()
@@ -71,19 +77,15 @@ def create_booking(bookings,teacher_id, room_code, date, start_hour, end_hour, n
     return booking
 
 def check_availability(bookings, room_code, date, start_hour, end_hour):
-    ap_info = get_ap(room_code)
-    if ap_info is None:
-        return False, None
-    ap_name = ap_info['ap_name']
-    
+    room_code_upper = room_code.strip().upper()
 
     for book in bookings:
-        if book['ap_name'] != ap_name or book['date'] != date: #is there something identical?
+        if book['room_code'] != room_code_upper or book['date'] != date:
             continue
-        if not (end_hour <= book['start_hour'] or start_hour >= book['end_hour']): #is the thing that is identical between the hours of the book?
-            return False, book #no booking available
+        if not (end_hour <= book['start_hour'] or start_hour >= book['end_hour']):
+            return False, book
         
-    return True, None #is available
+    return True, None
 
 def cancel_booking(bookings, booking_id):
     for i, book in enumerate(bookings):
@@ -125,9 +127,9 @@ def predict_for_room(room_code, date,start_hour,end_hour, n_students, df_clean):
     hours = list(range(start_hour, end_hour))
 
     input_df = df_clean[                          
-        (df_clean['swarm_name'] == ap_name) &
+        (df_clean['associated_device_name'] == ap_name) &
         (df_clean['hour'].isin(hours)) &
-        (df_clean['snapshot_ts'].dt.dayofweek == day_of_week)
+        (df_clean['dayofweek'] == day_of_week)
     ].copy()
 
     if len(input_df) == 0:
@@ -153,12 +155,12 @@ def show_availability (bookings, room_code, booking_date):
     if ap_info is None:
         return None
     
-    ap_name   = ap_info['ap_name']
+    room_code_upper = room_code.strip().upper()
     date_str  = str(booking_date)
     booked_ranges = [
         (b['start_hour'], b['end_hour'])
         for b in bookings
-        if b['ap_name'] == ap_name and b['date'] == date_str
+        if b['room_code'] == room_code_upper and b['date'] == date_str
     ]
 
     def is_booked(h):
@@ -246,7 +248,7 @@ with st.sidebar:
             with st.expander(f"{book['room_code']} // {book['date']} // {book['start_hour']:02d}–{book['end_hour']:02d}"):
                 st.write(f"AP: {book['ap_name']}")
                 st.write(f"Students: {book['n_students']}")
-                st.write(f"Min performance: {book['min_perf']}")
+                st.write(f"Min performance: {book['min_performance']}")
                 st.write(f"Performance: {book['predicted_performance']}")
                 st.write(f"Booking ID: {book['booking_id']}")
                 if st.button("Cancel this booking", key=f"cancel_{book['booking_id']}"):

@@ -46,9 +46,14 @@ class BookingPageState extends State<BookingPage> {
 
   static const _perfOptions = ['Fair', 'Good', 'Excellent'];
   static const _perfColors = {
+    'Very Poor': Colors.red,
+    'Weak': Colors.deepOrange,
+    'Poor': Colors.deepOrange,
     'Fair': Colors.orange,
     'Good': Colors.lightGreen,
     'Excellent': Colors.green,
+    'Excellent+': Colors.teal,
+    'Excellent++': Colors.cyan,
   };
 
   @override
@@ -184,7 +189,17 @@ class BookingPageState extends State<BookingPage> {
       // Check if performance meets minimum
       bool perfTooLow = false;
       if (perf != null) {
-        final perfRank = {'Very Poor': 0, 'Weak': 1, 'Fair': 2, 'Good': 3, 'Excellent': 4};
+        // Must match backend PERF_RANK in main.py — LSTM can return Excellent+, Excellent++, Poor
+        final perfRank = {
+          'Very Poor': 0,
+          'Weak': 1,
+          'Poor': 1,
+          'Fair': 2,
+          'Good': 3,
+          'Excellent': 4,
+          'Excellent+': 5,
+          'Excellent++': 6,
+        };
         final minRank = perfRank[_minPerformance] ?? 2;
         final actualRank = perfRank[perf] ?? 0;
 

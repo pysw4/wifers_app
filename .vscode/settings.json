@@ -1,0 +1,10 @@
+{
+    "python.defaultInterpreterPath": "/Users/ishmael/Desktop/wifers_app/.venv/bin/python3",
+    "python.terminal.activateEnvironment": false,
+    "jupyter.kernels.filter": [],
+    "python.analysis.extraPaths": [
+        "/Users/ishmael/Desktop/wifers_app/.venv/lib/python3.14/site-packages"
+    ],
+    "python.analysis.autoSearchPaths": true,
+    "python.analysis.useLibraryCodeForTypes": true
+}

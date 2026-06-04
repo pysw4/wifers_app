@@ -56,11 +56,37 @@ _decision_tree_v3_meta: Optional[dict] = None
 _building_encoder: Any = None
 _ap_name_encoder: Any = None
 _signal_strength_model: Any = None
-_signal_strength_meta: Any = None
+_signal_strength_meta: Optional[dict] = None
 _geojson_data: Optional[dict] = None
 _ap_index: Optional[list[dict]] = None
 _buildings_list: Optional[list[str]] = None
 _ap_index_by_name: dict[str, dict] = {}
+
+# --- Predictor5_0 (LSTM) global state ---
+_predictor5_loaded: bool = False
+_predictor5_model: Any = None
+_predictor5_scaler: Any = None
+_predictor5_le_ap: Any = None
+_predictor5_meta: Optional[dict] = None
+# AP hourly profile cache — average numeric features per hour for LSTM window construction
+_predictor5_ap_profiles: Optional[dict] = None
+_predictor5_window_cache: dict[int, dict] = {}  # {hash(ap_name+date): window_data}
+PREDICTOR5_MODEL_DIR = str(BASE_DIR / "predictor5_model")
+
+# Booking PERFORMANCE RANK — unified mapping for all models
+PERF_RANK = {
+    'Very Poor': 0, 'Weak': 1, 'Poor': 1, 'Fair': 2, 'Good': 3,
+    'Excellent': 4, 'Excellent+': 5, 'Excellent++': 6
+}
+# LSTM signal_score → booking label threshold
+LSTM_SCORE_THRESHOLDS = [
+    (0.95, 'Excellent++'),
+    (0.90, 'Excellent+'),
+    (0.80, 'Excellent'),
+    (0.70, 'Good'),
+    (0.50, 'Fair'),
+    (0.00, 'Poor'),  # Poor = Weak
+]
 
 # --- Lightweight route graph (precomputed JSON, no osmnx/networkx) ---
 _LIGHT_ROUTE_GRAPH: Optional[dict] = None
@@ -183,8 +209,6 @@ def _find_route_path(lat: float, lng: float, dest_lat: float, dest_lng: float, a
 # --- Booking system (in-memory storage) ---
 _bookings: list[dict] = []
 _room_lookup: dict[str, dict] = {}
-PERF_RANK = {'Very Poor': 0, 'Weak': 1, 'Fair': 2, 'Good': 3,
-             'Excellent': 4, 'Excellent+': 5, 'Excellent++': 6}
 
 # --- Prediction feedback / accuracy tracking ---
 _prediction_feedback: list[dict] = []  # Stores {ap_name, hour, predicted, actual, timestamp}
@@ -295,6 +319,255 @@ def _encode_ap_name(ap_name: str) -> int:
         if cls.strip().lower() == clean_name.lower():
             return int(encoder.transform([cls])[0])
     return 0
+
+
+# ─────────────────────────────────────────────
+#  Predictor5_0 LSTM — 懒加载 + AP 轮廓缓存
+# ─────────────────────────────────────────────
+
+def _load_predictor5() -> bool:
+    """Lazy-load Predictor5_0 LSTM model, scaler, label_encoder, meta.
+
+    Returns True if loaded successfully, False otherwise.
+    """
+    global _predictor5_loaded, _predictor5_model, _predictor5_scaler
+    global _predictor5_le_ap, _predictor5_meta
+
+    if _predictor5_loaded:
+        return True
+
+    model_dir = Path(PREDICTOR5_MODEL_DIR)
+    meta_path = model_dir / "meta.joblib"
+    if not meta_path.exists():
+        print("[WARN] Predictor5_0 meta not found — LSTM unavailable")
+        return False
+
+    try:
+        import joblib, torch, torch.nn as nn
+        import numpy as np
+
+        _predictor5_meta = joblib.load(str(meta_path))
+        _predictor5_scaler = joblib.load(str(model_dir / "scaler.joblib"))
+        _predictor5_le_ap = joblib.load(str(model_dir / "label_encoder.joblib"))
+
+        # Rebuild LSTM model
+        lstm1 = _predictor5_meta.get('lstm_units_1', 80)
+        lstm2 = _predictor5_meta.get('lstm_units_2', 48)
+        dense_u = _predictor5_meta.get('dense_units', 32)
+        n_feats = _predictor5_meta.get('n_features', 15)
+        fh = _predictor5_meta['forecast_horizon']
+
+        device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
+
+        # Define the same architecture as in run_predictor5.py
+        class LSTMBookingPredictor(nn.Module):
+            def __init__(self, input_size, hidden1, hidden2, dense_units, output_size):
+                super().__init__()
+                self.lstm1 = nn.LSTM(input_size, hidden1, batch_first=True)
+                self.drop1 = nn.Dropout(0.25)
+                self.lstm2 = nn.LSTM(hidden1, hidden2, batch_first=True)
+                self.drop2 = nn.Dropout(0.25)
+                self.fc1 = nn.Linear(hidden2, dense_units)
+                self.relu = nn.ReLU()
+                self.fc2 = nn.Linear(dense_units, output_size)
+
+            def forward(self, x):
+                x, _ = self.lstm1(x)
+                x = self.drop1(x)
+                x, _ = self.lstm2(x)
+                x = self.drop2(x)
+                x = x[:, -1, :]
+                x = self.relu(self.fc1(x))
+                x = self.fc2(x)
+                return x
+
+        _predictor5_model = LSTMBookingPredictor(n_feats, lstm1, lstm2, dense_u, fh)
+        state = torch.load(str(model_dir / "model_state.pt"), map_location=device, weights_only=True)
+        _predictor5_model.load_state_dict(state)
+        _predictor5_model.to(device)
+        _predictor5_model.eval()
+
+        _predictor5_loaded = True
+        print(f"[INFO] Predictor5_0 LSTM loaded ({_predictor5_meta['n_aps_used']} APs, "
+              f"test_MAE={_predictor5_meta['test_mae']:.4f})")
+        return True
+
+    except Exception as e:
+        print(f"[ERROR] Failed to load Predictor5_0: {e}")
+        import traceback
+        traceback.print_exc()
+        _predictor5_meta = None
+        return False
+
+
+def _load_predictor5_ap_profiles() -> Optional[dict]:
+    """Load precomputed AP hourly profiles for LSTM window construction.
+
+    Returns dict: {ap_name: {day_of_week: {hour: {feat: val, ...}}}}
+    """
+    global _predictor5_ap_profiles
+    if _predictor5_ap_profiles is not None:
+        return _predictor5_ap_profiles
+
+    profile_path = Path(str(BASE_DIR / "precomputed" / "predictor5_ap_profiles.json"))
+    if not profile_path.exists():
+        print("[WARN] Predictor5_0 AP profiles not found — run precompute_predictor5_profiles.py")
+        return None
+
+    try:
+        import json
+        with open(profile_path) as f:
+            _predictor5_ap_profiles = json.load(f)
+        print(f"[INFO] Predictor5_0 AP profiles loaded ({len(_predictor5_ap_profiles)} APs)")
+        return _predictor5_ap_profiles
+    except Exception as e:
+        print(f"[ERROR] Failed to load Predictor5_0 profiles: {e}")
+        return None
+
+
+def _signal_score_to_label(score: float) -> str:
+    """Convert a signal_score (0-1) to a booking performance label."""
+    for threshold, label in LSTM_SCORE_THRESHOLDS:
+        if score >= threshold:
+            return label
+    return 'Poor'
+
+
+def _predict_lstm_for_booking(ap_name: str, date_str: str, start_hour: int, end_hour: int) -> Optional[dict]:
+    """Use Predictor5_0 LSTM to predict signal_score for a booking slot.
+
+    Returns dict with 'label', 'scores' (hourly dict), or None if LSTM unavailable.
+    """
+    if not _predictor5_loaded:
+        if not _load_predictor5():
+            return None
+
+    ap_profiles = _load_predictor5_ap_profiles()
+    if ap_profiles is None:
+        return None
+
+    ap_key = ap_name.strip().lower()
+    # Find matching AP in profiles (case-insensitive, fuzzy)
+    matched_key = None
+    for profile_key in ap_profiles:
+        if profile_key.strip().lower() == ap_key:
+            matched_key = profile_key
+            break
+    if matched_key is None:
+        return None
+
+    ap_code = None
+    if _predictor5_le_ap is not None:
+        try:
+            clean = ap_name.strip()
+            if clean in _predictor5_le_ap.classes_:
+                ap_code = int(_predictor5_le_ap.transform([clean])[0])
+            else:
+                for cls in _predictor5_le_ap.classes_:
+                    if cls.strip().lower() == ap_key:
+                        ap_code = int(_predictor5_le_ap.transform([cls])[0])
+                        break
+        except Exception:
+            pass
+    if ap_code is None:
+        return None
+
+    import numpy as np
+    import torch
+
+    W = _predictor5_meta['window_size']  # 24
+    FH = _predictor5_meta['forecast_horizon']  # 12
+    all_feats = _predictor5_meta['all_features']
+    target_idx = _predictor5_meta['target_idx']
+    numeric_feats = _predictor5_meta['numeric_features']
+
+    booking_dt_obj = __import__('datetime').datetime.strptime(date_str, "%Y-%m-%d")
+    dow = booking_dt_obj.weekday()  # 0=Mon
+
+    # Build 24h window: timestamps [start_hour-24 .. start_hour-1]
+    feat_rows = []
+    for offset in range(W):
+        ts_hour = (start_hour - W + offset) % 24
+        ts_dow = dow
+        # Handle day boundary: if ts_hour wraps, adjust dow
+        hour_delta = start_hour - (W - offset)
+        actual_dow = (dow - 1) if hour_delta < 0 else dow
+        # Actually simpler: compute absolute hour offset
+        # Hour 0 of window = start_hour - 24 hours
+        # Each step = start_hour - 24 + offset
+        abs_hour = start_hour - W + offset
+        actual_dow = (dow - 1) if abs_hour < 0 else dow
+        if abs_hour < 0:
+            actual_hour = 24 + abs_hour
+        else:
+            actual_hour = abs_hour
+        actual_dow = actual_dow % 7
+
+        row = {
+            'ap_code': ap_code,
+            'hour_sin': np.sin(2 * np.pi * actual_hour / 24),
+            'hour_cos': np.cos(2 * np.pi * actual_hour / 24),
+            'day_sin': np.sin(2 * np.pi * actual_dow / 7),
+            'day_cos': np.cos(2 * np.pi * actual_dow / 7),
+        }
+
+        # Fill numeric features from profiles
+        ap_profile = ap_profiles.get(matched_key, {})
+        dow_str = str(actual_dow)
+        dow_data = ap_profile.get(dow_str, {})
+        hour_str = str(actual_hour)
+        hour_data = dow_data.get(hour_str, None)
+
+        if hour_data:
+            for feat in numeric_feats:
+                row[feat] = float(hour_data.get(feat, 0.5))
+        else:
+            for feat in numeric_feats:
+                row[feat] = 0.5
+
+        feat_rows.append(row)
+
+    # Build DataFrame and scale
+    import pandas as pd
+    input_df = pd.DataFrame(feat_rows)
+    # Ensure column order matches scaler
+    input_scaled = _predictor5_scaler.transform(input_df[all_feats])
+    X_input = np.expand_dims(input_scaled, axis=0).astype(np.float32)
+
+    # Predict
+    device = next(_predictor5_model.parameters()).device
+    with torch.no_grad():
+        X_tensor = torch.tensor(X_input, dtype=torch.float32).to(device)
+        pred_scaled = _predictor5_model(X_tensor).cpu().numpy()[0]
+
+    # Inverse transform (only target column)
+    dummy = np.zeros((len(pred_scaled), len(all_feats)))
+    dummy[:, target_idx] = pred_scaled
+    pred_scores = _predictor5_scaler.inverse_transform(dummy)[:, target_idx]
+    pred_scores = np.clip(pred_scores, 0, 1)
+
+    # Map predictions back to booking hours
+    # pred_scores[0] = score at start_hour+0, pred_scores[1] = start_hour+1, etc.
+    hourly_scores = {}
+    labels_for_hours = []
+    for i, h in enumerate(range(start_hour, end_hour)):
+        if i < len(pred_scores):
+            score = float(pred_scores[i])
+            label = _signal_score_to_label(score)
+            hourly_scores[h] = {'score': score, 'label': label}
+            labels_for_hours.append(label)
+
+    if not labels_for_hours:
+        return None
+
+    # Worst label = overall performance
+    perf_rank_map = PERF_RANK
+    worst_label = min(labels_for_hours, key=lambda lbl: perf_rank_map.get(lbl, 0))
+
+    return {
+        'label': worst_label,
+        'hourly_scores': hourly_scores,
+    }
 
 
 def _load_signal_strength_model():
@@ -632,74 +905,159 @@ def _check_booking_availability(bookings: list, room_code: str, date_str: str, s
     return True, None
 
 
-def _predict_booking_performance(room_code: str, date_str: str, start_hour: int, end_hour: int, n_students: int) -> dict:
-    """Predict performance for a booking slot. Returns dict with performance/warning."""
-    booking_dt = datetime.strptime(f"{date_str} {start_hour:02d}:00", "%Y-%m-%d %H:%M")
-    hours_until = (booking_dt - datetime.now()).total_seconds() / 3600
+def _apply_perf_penalty(label: str, steps: int) -> str:
+    """Apply a performance penalty by stepping down the label by `steps` ranks."""
+    rank_order = ['Very Poor', 'Weak', 'Poor', 'Fair', 'Good', 'Excellent', 'Excellent+', 'Excellent++']
+    try:
+        idx = rank_order.index(label)
+    except ValueError:
+        return label  # Unknown label, return as-is
+    new_idx = max(0, idx - steps)
+    return rank_order[new_idx]
 
+
+def _predict_booking_performance(room_code: str, date_str: str, start_hour: int, end_hour: int, n_students: int) -> dict:
+    """Predict performance for a booking slot using dual-model comparison.
+
+    Strategy:
+      1. Try Predictor5_0 LSTM (时序感知, 无时间限制, 269 APs).
+      2. Fall back to signal_strength RandomForest (建筑级, 5h limit,
+         所有 AP).
+      3. If both available, predict signal_db via RF → convert to label,
+         compare with LSTM label, pick more confident one.
+
+    Returns dict with performance, model_source, predictions.
+    """
     ap_info = _get_ap_from_room(room_code)
     if ap_info is None:
-        return {"ap_name": "Unknown", "performance": None, "warning": "Room not found"}
+        return {"ap_name": "Unknown", "performance": None,
+                "warning": "Room not found", "model_source": None}
 
     ap_name = ap_info["ap_name"]
     ap_entry = _find_ap_in_index(ap_name)
 
+    # ── Check for past slot ──
+    booking_dt = datetime.strptime(f"{date_str} {start_hour:02d}:00", "%Y-%m-%d %H:%M")
+    hours_until = (booking_dt - datetime.now()).total_seconds() / 3600
     if hours_until < 0:
-        return {
-            "ap_name": ap_name,
-            "performance": None,
-            "warning": "Cannot predict for a past time slot"
-        }
+        return {"ap_name": ap_name, "performance": None,
+                "warning": "Cannot predict for a past time slot",
+                "model_source": None}
 
-    if hours_until > 5:
-        return {
-            "ap_name": ap_name,
-            "performance": None,
-            "warning": f"Prediction not available — booking is {hours_until:.0f}h away (max 5h)"
-        }
+    # ── Strategy 1: Try LSTM first (no time limit!) ──
+    lstm_result = _predict_lstm_for_booking(ap_name, date_str, start_hour, end_hour)
+    lstm_available = lstm_result is not None
 
-    if ap_entry is None:
-        return {"ap_name": ap_name, "performance": None, "warning": "AP not found in database"}
+    # ── Strategy 2: RandomForest fallback ──
+    rf_available = False
+    rf_label = None
+    rf_predictions = None
 
-    try:
-        signal_model = _load_signal_strength_model()
-    except FileNotFoundError:
-        return {"ap_name": ap_name, "performance": None, "warning": "Signal model not loaded"}
+    if ap_entry is not None:
+        try:
+            signal_model = _load_signal_strength_model()
+            rf_available = True
+        except FileNotFoundError:
+            rf_available = False
 
-    booking_date = datetime.strptime(date_str, "%Y-%m-%d")
-    day_of_week = float(booking_date.weekday())
-    is_weekend = 1.0 if day_of_week >= 5 else 0.0
-    day_of_month = float(booking_date.day)
-    month = float(booking_date.month)
+    if rf_available and ap_entry is not None:
+        booking_date = datetime.strptime(date_str, "%Y-%m-%d")
+        day_of_week = float(booking_date.weekday())
+        is_weekend = 1.0 if day_of_week >= 5 else 0.0
+        day_of_month = float(booking_date.day)
+        month = float(booking_date.month)
+        building_code = _encode_building(ap_entry["building"])
+        ap_name_code = _encode_ap_name(ap_entry["name"])
+        hours = list(range(start_hour, end_hour))
 
-    building_code = _encode_building(ap_entry["building"])
-    ap_name_code = _encode_ap_name(ap_entry["name"])
-    hours = list(range(start_hour, end_hour))
+        import pandas as pd
+        rf_preds = []
+        for h in hours:
+            features = _build_signal_features(
+                building_code=building_code, floor=ap_entry["floor"],
+                hour=float(h), day_of_week=day_of_week,
+                is_weekend=is_weekend, day_of_month=day_of_month,
+                month=month, ap_name_code=ap_name_code
+            )
+            df = pd.DataFrame([features])
+            signal_db = float(signal_model.predict(df)[0])
+            quality = _dbm_to_quality(signal_db)["quality"]
+            rf_preds.append((h, quality))
 
-    import pandas as pd
+        if rf_preds:
+            rf_predictions = rf_preds
+            rf_label = min(rf_preds, key=lambda x: PERF_RANK.get(x[1], 0))[1]
 
-    predictions = []
-    for h in hours:
-        features = _build_signal_features(
-            building_code=building_code, floor=ap_entry["floor"],
-            hour=float(h), day_of_week=day_of_week,
-            is_weekend=is_weekend, day_of_month=day_of_month, month=month,
-            ap_name_code=ap_name_code
-        )
-        df = pd.DataFrame([features])
-        signal_db = float(signal_model.predict(df)[0])
-        quality = _dbm_to_quality(signal_db)["quality"]
-        predictions.append((h, quality))
+    # ── Choose best result ──
+    if lstm_available and rf_available:
+        # Dual-model: compare LSTM label vs RF label
+        lstm_label = lstm_result['label']
+        lstm_rank = PERF_RANK.get(lstm_label, 0)
+        rf_rank_val = PERF_RANK.get(rf_label, 0)
 
-    if not predictions:
-        return {"ap_name": ap_name, "performance": None, "warning": "No predictions available"}
+        # If LSTM gives significantly different (more pessimistic) result,
+        # or if LSTM is more optimistic, prefer LSTM (it's more precise:
+        # test MAE=0.0125 on signal_score vs RF MAE~3-5 dBm on signal_db).
+        # LSTM is trained on 269 APs, RF covers all APs.
+        # If ranks differ by >= 2, LSTM is more confident → use it.
+        # Otherwise: if LSTM rank >= RF rank, use LSTM (same or better).
+        # If RF better and LSTM very different, could be LSTM not trained on this AP.
+        if lstm_rank >= rf_rank_val or abs(lstm_rank - rf_rank_val) <= 1:
+            chosen_label = lstm_label
+            source = 'lstm'
+            hourly_preds = [(h, lstm_result['hourly_scores'][h]['label'])
+                            for h in range(start_hour, end_hour)
+                            if h in lstm_result['hourly_scores']]
+        else:
+            chosen_label = rf_label
+            source = 'rf'
+            hourly_preds = rf_predictions
 
-    worst = min(predictions, key=lambda x: PERF_RANK.get(x[1], 0))
+    elif lstm_available:
+        chosen_label = lstm_result['label']
+        source = 'lstm'
+        hourly_preds = [(h, lstm_result['hourly_scores'][h]['label'])
+                        for h in range(start_hour, end_hour)
+                        if h in lstm_result['hourly_scores']]
+    elif rf_available and rf_label is not None:
+        chosen_label = rf_label
+        source = 'rf'
+        hourly_preds = rf_predictions
+    else:
+        return {"ap_name": ap_name, "performance": None,
+                "warning": "No prediction model available",
+                "model_source": None}
+
+    # ── Apply n_students overload penalty ──
+    # Many students connecting to the same AP can degrade performance.
+    # LSTM was trained with client_count, but during inference we don't
+    # have a clean way to inject it into the LSTM window. Instead we
+    # apply an empirical penalty after prediction.
+    if chosen_label is not None:
+        penalty = 0
+        if n_students > 100:
+            penalty = 2
+        elif n_students > 50:
+            penalty = 1
+
+        if penalty > 0:
+            rank = PERF_RANK.get(chosen_label, 0)
+            deg_label = _apply_perf_penalty(chosen_label, penalty)
+            if deg_label != chosen_label:
+                chosen_label = deg_label
+                # Also degrade hourly predictions
+                if hourly_preds:
+                    hourly_preds = [
+                        (h, _apply_perf_penalty(lbl, penalty))
+                        for h, lbl in hourly_preds
+                    ]
+
     return {
         "ap_name": ap_name,
-        "performance": worst[1],
-        "predictions": predictions,
-        "warning": None
+        "performance": chosen_label,
+        "predictions": hourly_preds,
+        "warning": None,
+        "model_source": source,
     }
 
 
@@ -1679,6 +2037,7 @@ async def booking_create(request: BookingCreateRequest):
         "prediction": {
             "performance": pred.get("performance"),
             "warning": pred.get("warning"),
+            "model_source": pred.get("model_source"),
         }
     }
 
@@ -1722,6 +2081,7 @@ async def booking_predict(request: BookingPredictRequest):
         "prediction": {
             "performance": pred.get("performance"),
             "warning": pred.get("warning"),
+            "model_source": pred.get("model_source"),
         }
     }
 
