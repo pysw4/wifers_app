@@ -6,7 +6,7 @@ echo "🔨 Building Flutter Web..."
 flutter build web --release --base-href /wifers_app/
 
 echo "📂 Copying heatmap static files..."
-cp -r web/heatmaps build/web/heatmaps
+cp -r web/heatmaps/* build/web/heatmaps/
 echo "   ✅ Heatmap files copied to build/web/heatmaps/"
 
 echo "📦 Deploying to gh-pages branch..."
@@ -19,7 +19,7 @@ git add .
 git commit -m "Deploy Flutter Web - $(date '+%Y-%m-%d %H:%M')"
 
 # Push to gh-pages branch (force)
-git remote add origin git@github.com:pysw4/wifers_app.git
+git remote add origin git@github.com:pysw4/wifers_app.git 2>/dev/null || true
 git push origin gh-pages --force
 
 echo "✅ Deploy complete!"
