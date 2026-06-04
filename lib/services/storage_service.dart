@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/ap_info.dart';
 import 'cache_service.dart';
@@ -9,10 +10,14 @@ class StorageService {
 
   // Save favorites list
   static Future<void> saveFavorites(List<APInfo> favorites) async {
-    final prefs = await SharedPreferences.getInstance();
-    final List<Map<String, dynamic>> jsonList = favorites.map((ap) => ap.toJson()).toList();
-    final String encoded = jsonEncode(jsonList);
-    await prefs.setString(_favoritesKey, encoded);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final List<Map<String, dynamic>> jsonList = favorites.map((ap) => ap.toJson()).toList();
+      final String encoded = jsonEncode(jsonList);
+      await prefs.setString(_favoritesKey, encoded);
+    } catch (_) {
+      debugPrint('StorageService.saveFavorites: failed to save');
+    }
   }
 
   // Load favorites list
@@ -49,9 +54,13 @@ class StorageService {
 
   // Save settings
   static Future<void> saveSettings(Map<String, dynamic> settings) async {
-    final prefs = await SharedPreferences.getInstance();
-    final String encoded = jsonEncode(settings);
-    await prefs.setString(_settingsKey, encoded);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String encoded = jsonEncode(settings);
+      await prefs.setString(_settingsKey, encoded);
+    } catch (_) {
+      debugPrint('StorageService.saveSettings: failed to save');
+    }
   }
 
   // Load settings

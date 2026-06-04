@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Unified cache service with memory + persistent storage + TTL expiration.
@@ -56,17 +57,28 @@ class CacheService {
   }
 
   /// Set a cached value (both memory and persistent).
+  ///
+  /// If persistent storage (e.g. localStorage on web) fails — for instance
+  /// because the quota is exceeded — the error is silently caught and the
+  /// value remains available in the in-memory cache for the current session.
   static Future<void> set<T>(String key, T value) async {
     final now = DateTime.now();
 
-    // Memory cache
+    // Memory cache (always succeeds)
     _memoryCache[key] = _CacheEntry(value: value, timestamp: now);
 
     // Persistent cache (only for JSON-serializable types)
+    // May fail on web when localStorage quota is exceeded.
     if (value is String || value is num || value is bool || value is List || value is Map) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('$_persistPrefix$key', jsonEncode(value));
-      await prefs.setString('$_persistTimePrefix$key', now.toIso8601String());
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('$_persistPrefix$key', jsonEncode(value));
+        await prefs.setString('$_persistTimePrefix$key', now.toIso8601String());
+      } catch (_) {
+        // localStorage quota exceeded or unavailable — persist silently skipped.
+        // The value is still available from the in-memory cache.
+        debugPrint('CacheService.set: persistent storage write failed for key "$key"');
+      }
     }
   }
 
