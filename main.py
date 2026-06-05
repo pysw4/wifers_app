@@ -1525,7 +1525,7 @@ async def get_buildings():
         raise HTTPException(status_code=500, detail=f"Failed to load buildings: {str(e)}")
 
 
-@app.get("/predict/signal_strength/ap_trend/{ap_name:path}")
+@app.get("/predict/signal_strength/ap_trend/{ap_name}")
 async def get_ap_daily_trend(ap_name: str):
     cache_key = ap_name.strip().lower()
     
@@ -1868,7 +1868,7 @@ async def submit_prediction_feedback(request: PredictFeedbackRequest):
     }
 
 
-@app.get("/predict/stats/{ap_name:path}")
+@app.get("/predict/stats/{ap_name}")
 async def get_prediction_stats(ap_name: str):
     """Get prediction accuracy statistics for a specific AP."""
     cache_key = ap_name.strip().lower()
@@ -1899,7 +1899,7 @@ async def get_prediction_stats(ap_name: str):
     }
 
 
-@app.get("/predict/signal_strength/accuracy/{ap_name:path}")
+@app.get("/predict/signal_strength/accuracy/{ap_name}")
 async def get_ap_signal_accuracy(ap_name: str):
     """Get detailed prediction vs actual signal accuracy for a specific AP."""
     cache_key = ap_name.strip().lower()
@@ -2005,7 +2005,7 @@ async def get_ap_signal_accuracy(ap_name: str):
     }
 
 
-@app.get("/predict/signal_strength/ap_trend/{ap_name:path}/compare")
+@app.get("/predict/signal_strength/ap_trend/{ap_name}/compare")
 async def get_ap_trend_compare(ap_name: str):
     try:
         model = _load_signal_strength_model()
