@@ -433,6 +433,165 @@ def _signal_score_to_label(score: float) -> str:
     return 'Poor'
 
 
+def _map_score_to_dbm(score: float) -> float:
+    """Map a signal_score (0-1) back to approximate signal_db (dBm).
+    
+    Uses linear regression fitted on 156k samples:
+      signal_db = 90.6032 * signal_score - 93.3501
+    Pearson r = 0.9906
+    
+    Clamped to realistic [-97, -34] dBm range.
+    """
+    regression_m = 90.6032
+    regression_b = -93.3501
+    dbm = regression_m * score + regression_b
+    return max(-97.0, min(-34.0, dbm))
+
+
+def _build_lstm_window(ap_code: int, ap_profiles: dict, matched_key: str,
+                        numeric_feats: list, all_feats: list,
+                        target_dow: int, start_hour: int) -> Optional[list]:
+    """Build a 24-row feature window for LSTM inference.
+    
+    Each row covers one hour in the 24h window before `start_hour`.
+    """
+    import numpy as np
+    W = 24
+    rows = []
+    for offset in range(W):
+        abs_hour = start_hour - W + offset
+        if abs_hour < 0:
+            actual_hour = 24 + abs_hour
+            actual_dow = (target_dow - 1) % 7
+        else:
+            actual_hour = abs_hour
+            actual_dow = target_dow
+        
+        row = {
+            'ap_code': ap_code,
+            'hour_sin': np.sin(2 * np.pi * actual_hour / 24),
+            'hour_cos': np.cos(2 * np.pi * actual_hour / 24),
+            'day_sin': np.sin(2 * np.pi * actual_dow / 7),
+            'day_cos': np.cos(2 * np.pi * actual_dow / 7),
+        }
+        
+        ap_profile = ap_profiles.get(matched_key, {})
+        dow_str = str(actual_dow)
+        hour_str = str(actual_hour)
+        hour_data = ap_profile.get(dow_str, {}).get(hour_str, None)
+        
+        if hour_data:
+            for feat in numeric_feats:
+                row[feat] = float(hour_data.get(feat, 0.5))
+        else:
+            for feat in numeric_feats:
+                row[feat] = 0.5
+        
+        rows.append(row)
+    return rows
+
+
+def _predict_lstm_trend_24h(ap_name: str) -> Optional[list]:
+    """Use Predictor5_0 LSTM to predict signal_score for all 24 hours of today.
+    
+    Uses 4 overlapping sliding windows (each predicting 12h ahead) to cover
+    all 24 hours. Overlaps are averaged for smooth transitions.
+    
+    Returns list of dicts with hour, predicted_score, or None if LSTM unavailable.
+    """
+    if not _predictor5_loaded:
+        if not _load_predictor5():
+            return None
+    
+    ap_profiles = _load_predictor5_ap_profiles()
+    if ap_profiles is None:
+        return None
+    
+    ap_key = ap_name.strip().lower()
+    matched_key = None
+    for profile_key in ap_profiles:
+        if profile_key.strip().lower() == ap_key:
+            matched_key = profile_key
+            break
+    if matched_key is None:
+        return None
+    
+    ap_code = None
+    if _predictor5_le_ap is not None:
+        try:
+            clean = ap_name.strip()
+            if clean in _predictor5_le_ap.classes_:
+                ap_code = int(_predictor5_le_ap.transform([clean])[0])
+            else:
+                for cls in _predictor5_le_ap.classes_:
+                    if cls.strip().lower() == ap_key:
+                        ap_code = int(_predictor5_le_ap.transform([cls])[0])
+                        break
+        except Exception:
+            pass
+    if ap_code is None:
+        return None
+    
+    import numpy as np
+    import torch
+    import pandas as pd
+    
+    FH = _predictor5_meta['forecast_horizon']  # 12
+    all_feats = _predictor5_meta['all_features']
+    target_idx = _predictor5_meta['target_idx']
+    numeric_feats = _predictor5_meta['numeric_features']
+    
+    today = datetime.now()
+    dow = today.weekday()  # 0=Mon
+    
+    # Use 4 overlapping sliding windows to cover 24h
+    # Window start hours: 0, 6, 12, 18 → each predicts 12h ahead
+    window_starts = [0, 6, 12, 18]
+    
+    # Accumulate predictions: sum_scores[hour] = (total_score, count)
+    sum_scores = {h: [0.0, 0] for h in range(24)}
+    
+    device = next(_predictor5_model.parameters()).device
+    
+    for ws in window_starts:
+        rows = _build_lstm_window(ap_code, ap_profiles, matched_key,
+                                    numeric_feats, all_feats, dow, ws)
+        if rows is None:
+            continue
+        
+        input_df = pd.DataFrame(rows)
+        input_scaled = _predictor5_scaler.transform(input_df[all_feats])
+        X_input = np.expand_dims(input_scaled, axis=0).astype(np.float32)
+        
+        with torch.no_grad():
+            X_tensor = torch.tensor(X_input, dtype=torch.float32).to(device)
+            pred_scaled = _predictor5_model(X_tensor).cpu().numpy()[0]
+        
+        # Inverse transform (only target column)
+        dummy = np.zeros((len(pred_scaled), len(all_feats)))
+        dummy[:, target_idx] = pred_scaled
+        pred_scores = _predictor5_scaler.inverse_transform(dummy)[:, target_idx]
+        pred_scores = np.clip(pred_scores, 0, 1)
+        
+        # Map predictions to absolute hours
+        for i in range(FH):
+            abs_hour = (ws + i) % 24
+            sum_scores[abs_hour][0] += float(pred_scores[i])
+            sum_scores[abs_hour][1] += 1
+    
+    # Average overlapping predictions
+    result = []
+    for h in range(24):
+        total, count = sum_scores[h]
+        avg_score = total / count if count > 0 else 0.3681
+        result.append({
+            "hour": h,
+            "predicted_score": round(avg_score, 4),
+        })
+    
+    return result
+
+
 def _predict_lstm_for_booking(ap_name: str, date_str: str, start_hour: int, end_hour: int) -> Optional[dict]:
     """Use Predictor5_0 LSTM to predict signal_score for a booking slot.
 
@@ -1291,42 +1450,70 @@ async def get_ap_daily_trend(ap_name: str):
     day_name = DAY_NAMES[day_of_week]  # e.g. 'mon', 'tue', ..., 'sun'
     day_type = "weekend" if is_weekend else "weekday"
     
-    # --- Try Predictor5_0 AP profiles first (real measured signal_db averages) ---
-    ap_profiles = _load_predictor5_ap_profiles()
-    ap_key = ap_name.strip().lower()
-    matched_profile_key = None
-    if ap_profiles is not None:
-        for profile_key in ap_profiles:
-            if profile_key.strip().lower() == ap_key:
-                matched_profile_key = profile_key
-                break
+    # --- Strategy: LSTM → profiles → RF fallback ---
+    hourly_data = []
+    signal_values = []
+    source = "unknown"
     
-    if matched_profile_key is not None:
-        # Use real measured averages — most accurate
-        profile_data = ap_profiles[matched_profile_key]
-        dow_str = str(day_of_week)
-        hourly_data = []
-        signal_values = []
-        for hour in range(24):
-            hour_str = str(hour)
-            if dow_str in profile_data and hour_str in profile_data[dow_str]:
-                signal_db = float(profile_data[dow_str][hour_str].get('signal_db', -70.0))
-            else:
-                signal_db = -70.0
+    # 1) Try LSTM rolling prediction first (date-aware, context-aware)
+    lstm_trend = _predict_lstm_trend_24h(ap_name)
+    if lstm_trend is not None:
+        source = "lstm"
+        for h_entry in lstm_trend:
+            hour = h_entry["hour"]
+            score = h_entry["predicted_score"]
+            signal_db = _map_score_to_dbm(score)
             quality_info = _dbm_to_quality(signal_db)
             status = _dbm_to_status(signal_db)
             status_conf = _dbm_to_status_confidence(signal_db)
             hourly_data.append({
                 "hour": hour,
                 "signal_db": round(signal_db, 1),
+                "predicted_score": round(score, 4),
                 "signal_quality": quality_info["quality"],
                 "bars": quality_info["bars"],
                 "predicted_status": status,
                 "status_confidence": status_conf,
             })
-            signal_values.append(round(signal_db, 1))
-    else:
-        # Fallback: use RandomForest signal strength model
+            signal_values.append(signal_db)
+    
+    if source == "unknown":
+        # 2) Fallback: real measured averages from profiles
+        ap_profiles = _load_predictor5_ap_profiles()
+        ap_key = ap_name.strip().lower()
+        matched_profile_key = None
+        if ap_profiles is not None:
+            for profile_key in ap_profiles:
+                if profile_key.strip().lower() == ap_key:
+                    matched_profile_key = profile_key
+                    break
+        
+        if matched_profile_key is not None:
+            source = "profiles"
+            profile_data = ap_profiles[matched_profile_key]
+            dow_str = str(day_of_week)
+            for hour in range(24):
+                hour_str = str(hour)
+                if dow_str in profile_data and hour_str in profile_data[dow_str]:
+                    signal_db = float(profile_data[dow_str][hour_str].get('signal_db', -70.0))
+                else:
+                    signal_db = -70.0
+                quality_info = _dbm_to_quality(signal_db)
+                status = _dbm_to_status(signal_db)
+                status_conf = _dbm_to_status_confidence(signal_db)
+                hourly_data.append({
+                    "hour": hour,
+                    "signal_db": round(signal_db, 1),
+                    "signal_quality": quality_info["quality"],
+                    "bars": quality_info["bars"],
+                    "predicted_status": status,
+                    "status_confidence": status_conf,
+                })
+                signal_values.append(signal_db)
+    
+    if source == "unknown":
+        # 3) Final fallback: RandomForest signal strength model
+        source = "rf_model"
         try:
             model = _load_signal_strength_model()
         except FileNotFoundError as e:
@@ -1340,8 +1527,6 @@ async def get_ap_daily_trend(ap_name: str):
         df = pd.DataFrame(rows)
         predictions = model.predict(df)
         smoothed = _smooth_series([float(p) for p in predictions], window=5)
-        hourly_data = []
-        signal_values = []
         for hour, signal_db in enumerate(smoothed):
             quality_info = _dbm_to_quality(float(signal_db))
             status = _dbm_to_status(float(signal_db))
@@ -1354,7 +1539,7 @@ async def get_ap_daily_trend(ap_name: str):
                 "predicted_status": status,
                 "status_confidence": status_conf,
             })
-            signal_values.append(round(float(signal_db), 1))
+            signal_values.append(float(signal_db))
     
     avg_db = sum(signal_values) / len(signal_values) if signal_values else 0
     max_db = max(signal_values) if signal_values else 0
@@ -1511,7 +1696,7 @@ async def get_ap_daily_trend(ap_name: str):
         "lat": ap_entry["lat"],
         "lng": ap_entry["lng"],
         "trend": hourly_data,
-        "source": "profiles" if matched_profile_key is not None else "rf_model",
+        "source": source,
         "day_type": day_type,
         "day_name": day_name,
         "stats": {
