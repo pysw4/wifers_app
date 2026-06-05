@@ -1276,51 +1276,86 @@ async def get_ap_daily_trend(ap_name: str):
         except Exception:
             pass  # Treat corrupt file as cache miss
     
-    try:
-        model = _load_signal_strength_model()
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e))
     ap_entry = _find_ap_in_index(ap_name)
     if ap_entry is None:
         raise HTTPException(status_code=404, detail=f"AP '{ap_name}' not found")
     building = ap_entry["building"]
     floor = ap_entry["floor"]
-    building_code = _encode_building(building)
     
     # Use current date for trend prediction
     today = datetime.now()
-    day_of_week = float(today.weekday())  # 0=Mon, 6=Sun
+    day_of_week = today.weekday()  # 0=Mon, 6=Sun
     is_weekend = 1.0 if day_of_week >= 5 else 0.0
     day_of_month = float(today.day)
     month = float(today.month)
-    day_name = DAY_NAMES[int(day_of_week)]  # e.g. 'mon', 'tue', ..., 'sun'
+    day_name = DAY_NAMES[day_of_week]  # e.g. 'mon', 'tue', ..., 'sun'
     day_type = "weekend" if is_weekend else "weekday"
     
-    # On-demand inference (no in-memory cache, just compute)
-    import pandas as pd
-    ap_name_code = _encode_ap_name(ap_entry["name"])
-    rows = []
-    for hour in range(24):
-        rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=day_of_month, month=month, ap_name_code=ap_name_code))
-    df = pd.DataFrame(rows)
-    predictions = model.predict(df)
-    # Smooth raw predictions to reduce spikiness
-    smoothed = _smooth_series([float(p) for p in predictions], window=5)
-    hourly_data = []
-    signal_values = []
-    for hour, signal_db in enumerate(smoothed):
-        quality_info = _dbm_to_quality(float(signal_db))
-        status = _dbm_to_status(float(signal_db))
-        status_conf = _dbm_to_status_confidence(float(signal_db))
-        hourly_data.append({
-            "hour": hour,
-            "signal_db": round(float(signal_db), 1),
-            "signal_quality": quality_info["quality"],
-            "bars": quality_info["bars"],
-            "predicted_status": status,
-            "status_confidence": status_conf,
-        })
-        signal_values.append(round(float(signal_db), 1))
+    # --- Try Predictor5_0 AP profiles first (real measured signal_db averages) ---
+    ap_profiles = _load_predictor5_ap_profiles()
+    ap_key = ap_name.strip().lower()
+    matched_profile_key = None
+    if ap_profiles is not None:
+        for profile_key in ap_profiles:
+            if profile_key.strip().lower() == ap_key:
+                matched_profile_key = profile_key
+                break
+    
+    if matched_profile_key is not None:
+        # Use real measured averages — most accurate
+        profile_data = ap_profiles[matched_profile_key]
+        dow_str = str(day_of_week)
+        hourly_data = []
+        signal_values = []
+        for hour in range(24):
+            hour_str = str(hour)
+            if dow_str in profile_data and hour_str in profile_data[dow_str]:
+                signal_db = float(profile_data[dow_str][hour_str].get('signal_db', -70.0))
+            else:
+                signal_db = -70.0
+            quality_info = _dbm_to_quality(signal_db)
+            status = _dbm_to_status(signal_db)
+            status_conf = _dbm_to_status_confidence(signal_db)
+            hourly_data.append({
+                "hour": hour,
+                "signal_db": round(signal_db, 1),
+                "signal_quality": quality_info["quality"],
+                "bars": quality_info["bars"],
+                "predicted_status": status,
+                "status_confidence": status_conf,
+            })
+            signal_values.append(round(signal_db, 1))
+    else:
+        # Fallback: use RandomForest signal strength model
+        try:
+            model = _load_signal_strength_model()
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        building_code = _encode_building(building)
+        import pandas as pd
+        ap_name_code = _encode_ap_name(ap_entry["name"])
+        rows = []
+        for hour in range(24):
+            rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=float(day_of_week), is_weekend=is_weekend, day_of_month=day_of_month, month=month, ap_name_code=ap_name_code))
+        df = pd.DataFrame(rows)
+        predictions = model.predict(df)
+        smoothed = _smooth_series([float(p) for p in predictions], window=5)
+        hourly_data = []
+        signal_values = []
+        for hour, signal_db in enumerate(smoothed):
+            quality_info = _dbm_to_quality(float(signal_db))
+            status = _dbm_to_status(float(signal_db))
+            status_conf = _dbm_to_status_confidence(float(signal_db))
+            hourly_data.append({
+                "hour": hour,
+                "signal_db": round(float(signal_db), 1),
+                "signal_quality": quality_info["quality"],
+                "bars": quality_info["bars"],
+                "predicted_status": status,
+                "status_confidence": status_conf,
+            })
+            signal_values.append(round(float(signal_db), 1))
+    
     avg_db = sum(signal_values) / len(signal_values) if signal_values else 0
     max_db = max(signal_values) if signal_values else 0
     min_db = min(signal_values) if signal_values else 0
@@ -1476,6 +1511,7 @@ async def get_ap_daily_trend(ap_name: str):
         "lat": ap_entry["lat"],
         "lng": ap_entry["lng"],
         "trend": hourly_data,
+        "source": "profiles" if matched_profile_key is not None else "rf_model",
         "day_type": day_type,
         "day_name": day_name,
         "stats": {
