@@ -13,7 +13,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// `map: failed to execute setitem on storage` errors.
 class CacheService {
   /// Bump this on deploy to invalidate ALL persistent caches.
-  static const int cacheVersion = 2;
+  /// v3: /compare API changed from weekday/weekend → predicted/historical
+  static const int cacheVersion = 3;
   static const String _cacheVersionKey = '_cache_service_version';
 
   /// Call at app startup to wipe stale persistent caches from an older version.

@@ -136,7 +136,8 @@ class _APTrendDialogState extends State<APTrendDialog> {
 
   /// Load predicted vs historical comparison data
   Future<void> _loadCompare() async {
-    final cacheKey = 'trend_compare_${widget.apName.toLowerCase()}';
+    // v3: /compare now returns predicted/historical (not weekday/weekend)
+    final cacheKey = 'trend_compare_v3_${widget.apName.toLowerCase()}';
     const ttl = Duration(minutes: 15);
 
     setState(() => _compareLoading = true);
