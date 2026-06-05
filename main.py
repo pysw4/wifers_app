@@ -68,8 +68,9 @@ _predictor5_model: Any = None
 _predictor5_scaler: Any = None
 _predictor5_le_ap: Any = None
 _predictor5_meta: Optional[dict] = None
-# AP hourly profile cache — average numeric features per hour for LSTM window construction
-_predictor5_ap_profiles: Optional[dict] = None
+# AP hourly profile cache — lazy-loaded per-AP (avoids loading 12 MB into memory)
+_predictor5_ap_index: Optional[list] = None  # [{name, hash}, ...]
+_predictor5_ap_profiles_dir = str(BASE_DIR / "precomputed" / "profiles_v2")
 _predictor5_window_cache: dict[int, dict] = {}  # {hash(ap_name+date): window_data}
 PREDICTOR5_MODEL_DIR = str(BASE_DIR / "predictor5_model")
 
@@ -412,33 +413,96 @@ PROFILE_FEATURE_NAMES = ['signal_score', 'signal_strength', 'signal_db', 'snr',
                          'speed', 'maxspeed']
 
 
-def _load_predictor5_ap_profiles() -> Optional[dict]:
-    """Load precomputed AP hourly profiles for LSTM window construction.
+# ═══════════════════════════════════════════════════════════════════════
+#  Predictor5 AP profile loader — 懒加载, 按需读取单个 AP (不把 12 MB 全读入内存)
+# ═══════════════════════════════════════════════════════════════════════
 
-    Returns dict: {ap_name: [1680 floats]}, where each AP entry is a flat array
-    of 7×24×10 = 1680 values. The 10 features per hour are:
-      signal_score, signal_strength, signal_db, snr, cpu_utilization,
-      mem_usage, client_count, health, speed, maxspeed
-    Access: arr[(dow * 24 + hour) * 10 + feature_index]
+def _load_profile_index() -> Optional[list]:
+    """Load the profile index (AP name → hash mapping).
+
+    77 KB 索引, 仅读一次 → 缓存.
+    """
+    global _predictor5_ap_index
+    if _predictor5_ap_index is not None:
+        return _predictor5_ap_index
+
+    index_path = Path(_predictor5_ap_profiles_dir) / "_index.json"
+    if not index_path.exists():
+        print(f"[WARN] Profile index not found — run precompute_split_profiles.py first")
+        return None
+
+    try:
+        with open(index_path) as f:
+            idx = json.load(f)
+        _predictor5_ap_index = idx["entries"]
+        print(f"[INFO] Profile index loaded ({idx['count']} APs)")
+        return _predictor5_ap_index
+    except Exception as e:
+        print(f"[ERROR] Failed to load profile index: {e}")
+        return None
+
+
+def _load_one_profile(ap_name: str) -> Optional[list]:
+    """Load a single AP's profile from disk — ~10 KB memory, not 62 MB.
+
+    Args:
+        ap_name: AP name (case-insensitive).
+
+    Returns:
+        Flat list of 1680 floats, or None if not found.
+    """
+    import hashlib
+
+    index = _load_profile_index()
+    if index is None:
+        return None
+
+    ap_key = ap_name.strip().lower()
+    matched = None
+    for entry in index:
+        if entry["name"].strip().lower() == ap_key:
+            matched = entry
+            break
+    if matched is None:
+        return None
+
+    filepath = Path(_predictor5_ap_profiles_dir) / f"{matched['hash']}.json"
+    if not filepath.exists():
+        return None
+
+    try:
+        with open(filepath) as f:
+            data = json.load(f)
+        return data.get(matched["name"])
+    except Exception as e:
+        print(f"[WARN] Failed to load profile for {ap_name}: {e}")
+        return None
+
+
+def _load_predictor5_ap_profiles() -> Optional[dict]:
+    """返回全部 profiles 的字典 (兼容旧接口).
+
+    ⚠️ 此函数会加载所有 1181 个 AP 到内存 (~62 MB).
+    新代码应改用 `_load_one_profile(ap_name)` 按需读取.
+
+    保留此函数仅用于向后兼容 (LSTM window builder 需全量 profiles).
     """
     global _predictor5_ap_profiles
     if _predictor5_ap_profiles is not None:
         return _predictor5_ap_profiles
 
     profile_path = Path(str(BASE_DIR / "precomputed" / "predictor5_ap_profiles.json"))
-    if not profile_path.exists():
-        print("[WARN] Predictor5_0 AP profiles not found — run precompute_predictor5_profiles.py")
-        return None
+    if profile_path.exists():
+        try:
+            with open(profile_path) as f:
+                _predictor5_ap_profiles = json.load(f)
+            print(f"[INFO] Predictor5_0 AP profiles loaded ({len(_predictor5_ap_profiles)} APs, flat array format)")
+            return _predictor5_ap_profiles
+        except Exception as e:
+            print(f"[ERROR] Failed to load monolithic profiles: {e}")
 
-    try:
-        import json
-        with open(profile_path) as f:
-            _predictor5_ap_profiles = json.load(f)
-        print(f"[INFO] Predictor5_0 AP profiles loaded ({len(_predictor5_ap_profiles)} APs, flat array format)")
-        return _predictor5_ap_profiles
-    except Exception as e:
-        print(f"[ERROR] Failed to load Predictor5_0 profiles: {e}")
-        return None
+    print("[WARN] Predictor5_0 AP profiles not found — run precompute_predictor5_profiles.py")
+    return None
 
 
 def _signal_score_to_label(score: float) -> str:
@@ -551,17 +615,18 @@ def _predict_lstm_trend_24h(ap_name: str) -> Optional[list]:
         if not _load_predictor5():
             return None
     
-    ap_profiles = _load_predictor5_ap_profiles()
-    if ap_profiles is None:
-        return None
-    
+    # Use lazy per-AP loading instead of loading all 12 MB profiles
     ap_key = ap_name.strip().lower()
     matched_key = None
-    for profile_key in ap_profiles:
-        if profile_key.strip().lower() == ap_key:
-            matched_key = profile_key
-            break
-    if matched_key is None:
+    index = _load_profile_index()
+    if index is not None:
+        for entry in index:
+            if entry["name"].strip().lower() == ap_key:
+                matched_key = entry["name"]
+                break
+    
+    profile_arr = _load_one_profile(ap_name) if matched_key else None
+    if profile_arr is None:
         return None
     
     ap_code = None
@@ -593,13 +658,17 @@ def _predict_lstm_trend_24h(ap_name: str) -> Optional[list]:
     dow = today.weekday()  # 0=Mon
     
     # Use 4 overlapping sliding windows to cover 24h
-    # Window start hours: 0, 6, 12, 18 → each predicts 12h ahead
     window_starts = [0, 6, 12, 18]
     
-    # Accumulate predictions: sum_scores[hour] = (total_score, count)
+    # Accumulate predictions
     sum_scores = {h: [0.0, 0] for h in range(24)}
     
     device = next(_predictor5_model.parameters()).device
+    
+    # Build a minimal profile dict for _build_lstm_window
+    ap_profiles = {matched_key: profile_arr} if matched_key else {}
+    if not ap_profiles:
+        return None
     
     for ws in window_starts:
         rows = _build_lstm_window(ap_code, ap_profiles, matched_key,
@@ -649,19 +718,13 @@ def _predict_lstm_for_booking(ap_name: str, date_str: str, start_hour: int, end_
         if not _load_predictor5():
             return None
 
-    ap_profiles = _load_predictor5_ap_profiles()
-    if ap_profiles is None:
+    profile_arr = _load_one_profile(ap_name)
+    if profile_arr is None:
         return None
 
     ap_key = ap_name.strip().lower()
-    # Find matching AP in profiles (case-insensitive, fuzzy)
-    matched_key = None
-    for profile_key in ap_profiles:
-        if profile_key.strip().lower() == ap_key:
-            matched_key = profile_key
-            break
-    if matched_key is None:
-        return None
+    matched_key = ap_name
+    ap_profiles = {ap_name: profile_arr}
 
     ap_code = None
     if _predictor5_le_ap is not None:
@@ -1522,18 +1585,10 @@ async def get_ap_daily_trend(ap_name: str):
     
     if source == "unknown":
         # 2) Fallback: real measured averages from profiles (flat array format)
-        ap_profiles = _load_predictor5_ap_profiles()
-        ap_key = ap_name.strip().lower()
-        matched_profile_key = None
-        if ap_profiles is not None:
-            for profile_key in ap_profiles:
-                if profile_key.strip().lower() == ap_key:
-                    matched_profile_key = profile_key
-                    break
+        profile_arr = _load_one_profile(ap_name)
         
-        if matched_profile_key is not None:
+        if profile_arr is not None:
             source = "profiles"
-            profile_arr = ap_profiles[matched_profile_key]
             for hour in range(24):
                 signal_db = _get_profile_feat(profile_arr, day_of_week, hour, 'signal_db', -70.0)
                 quality_info = _dbm_to_quality(signal_db)
