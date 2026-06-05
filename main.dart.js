@@ -32226,13 +32226,13 @@ s=6
 return A.o(A.h_(),$async$C4)
 case 6:o=b
 n=A.dJ(o.a.i(0,"_cache_service_version"))
-s=!J.d(n,2)?7:8
+s=!J.d(n,3)?7:8
 break
-case 7:A.cS().$1("CacheService: version changed "+A.k(n)+" \u2192 2, clearing persistent cache")
+case 7:A.cS().$1("CacheService: version changed "+A.k(n)+" \u2192 3, clearing persistent cache")
 s=9
 return A.o(A.C3(),$async$C4)
 case 9:s=10
-return A.o(o.mA("Int","_cache_service_version",2),$async$C4)
+return A.o(o.mA("Int","_cache_service_version",3),$async$C4)
 case 10:case 8:q=1
 s=5
 break
@@ -108532,7 +108532,7 @@ case 1:return A.D(p.at(-1),r)}})
 return A.F($async$wO,r)},
 wK(){var s=0,r=A.G(t.H),q=1,p=[],o=this,n,m,l,k,j,i,h,g,f,e,d,c,b,a,a0,a1
 var $async$wK=A.C(function(a2,a3){if(a2===1){p.push(a3)
-s=q}for(;;)switch(s){case 0:a="trend_compare_"+o.a.c.toLowerCase()
+s=q}for(;;)switch(s){case 0:a="trend_compare_v3_"+o.a.c.toLowerCase()
 o.M(new A.azC(o))
 q=3
 j={}
