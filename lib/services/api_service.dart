@@ -98,6 +98,10 @@ class ApiService {
   Future<Map<String, dynamic>> getAPDailyTrend(String apName) async =>
       await _get('predict/signal_strength/ap_trend/$apName') as Map<String, dynamic>;
 
+  /// Get weekday vs weekend comparison for AP signal strength trend
+  Future<Map<String, dynamic>> getAPTrendCompare(String apName) async =>
+      await _get('predict/signal_strength/ap_trend/$apName/compare') as Map<String, dynamic>;
+
   /// Submit user feedback on prediction accuracy
   Future<Map<String, dynamic>> submitPredictionFeedback({
     required String apName,

@@ -1,8 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:wifers_app/services/api_service.dart';
+import 'package:wifers_app/services/cache_service.dart';
 
 /// Displays the 24-hour signal strength trend chart for a specific AP
+///
+/// Features:
+/// - Line chart / Bar chart toggle
+/// - Actual average overlay (from clientes_processed.csv)
+/// - **Weekday vs Weekend comparison mode** (uses /compare endpoint)
+/// - **CacheService** caching for faster re-open
 class APTrendDialog extends StatefulWidget {
   final String apName;
   final String? building;
@@ -26,9 +33,15 @@ class _APTrendDialogState extends State<APTrendDialog> {
   String _dayLabel = 'Weekday';
   Map<String, dynamic> _stats = {};
   Map<String, dynamic> _accuracy = {};
-  Map<String, dynamic>? _accuracyVsActual; // accuracy_vs_actual from trend API
-  bool _showBars = true; // Toggle line chart / bar chart
-  bool _showAverage = false; // Toggle actual average overlay
+  Map<String, dynamic>? _accuracyVsActual;
+  bool _showBars = true;
+  bool _showAverage = false;
+
+  // -- Comparison mode state --
+  bool _compareMode = false;
+  bool _compareLoading = false;
+  List<Map<String, dynamic>> _weekdayTrend = [];
+  List<Map<String, dynamic>> _weekendTrend = [];
 
   /// Map backend day names ('mon'/'tue'/.../'sun') to display labels
   static const Map<String, String> _dayLabels = {
@@ -46,7 +59,6 @@ class _APTrendDialogState extends State<APTrendDialog> {
   /// Compute day label from current date
   String _getCurrentDayLabel() {
     final now = DateTime.now();
-    // DateTime weekday: 1=Mon ... 7=Sun
     final dayNames = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
     final dayName = dayNames[now.weekday - 1];
     final label = _dayLabels[dayName] ?? 'Weekday';
@@ -66,24 +78,43 @@ class _APTrendDialogState extends State<APTrendDialog> {
     _loadTrend();
   }
 
+  /// Load trend data, using CacheService for caching
   Future<void> _loadTrend() async {
+    // Cache key v2 — version suffix forces cache refresh when backend changes
+    final cacheKey = 'trend_v2_${widget.apName.toLowerCase()}';
+    const ttl = Duration(minutes: 10);
+
     try {
-      final data = await _apiService.getAPDailyTrend(widget.apName);
+      // 1) Try cache first
+      final cached = await CacheService.get<Map<String, dynamic>>(
+        cacheKey,
+        ttl: ttl,
+      );
+
+      Map<String, dynamic> data;
+      if (cached != null) {
+        data = cached;
+      } else {
+        // 2) Fetch from API
+        data = await _apiService.getAPDailyTrend(widget.apName);
+        // Save to cache (fire & forget)
+        CacheService.set(cacheKey, data);
+      }
+
       final trend = (data['trend'] as List<dynamic>)
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
       setState(() {
         _trendData = trend;
-        // Use day_type and day_name from backend response
         final backendDayType = data['day_type'] as String?;
         final backendDayName = data['day_name'] as String?;
         if (backendDayType != null && backendDayName != null) {
           _dayType = backendDayType;
           _dayLabel = _formatDayType(backendDayName);
         } else {
-          // Fallback to current date if backend doesn't provide these
           final now = DateTime.now();
-          final isWeekend = now.weekday == DateTime.saturday || now.weekday == DateTime.sunday;
+          final isWeekend =
+              now.weekday == DateTime.saturday || now.weekday == DateTime.sunday;
           _dayType = isWeekend ? 'weekend' : 'weekday';
           _dayLabel = _getCurrentDayLabel();
         }
@@ -97,6 +128,53 @@ class _APTrendDialogState extends State<APTrendDialog> {
         _error = e.toString();
         _isLoading = false;
       });
+    }
+  }
+
+  /// Load weekday vs weekend comparison data
+  Future<void> _loadCompare() async {
+    final cacheKey = 'trend_compare_${widget.apName.toLowerCase()}';
+    const ttl = Duration(minutes: 15);
+
+    setState(() => _compareLoading = true);
+
+    try {
+      // 1) Try cache
+      final cached = await CacheService.get<Map<String, dynamic>>(
+        cacheKey,
+        ttl: ttl,
+      );
+
+      Map<String, dynamic> data;
+      if (cached != null) {
+        data = cached;
+      } else {
+        data = await _apiService.getAPTrendCompare(widget.apName);
+        CacheService.set(cacheKey, data);
+      }
+
+      final weekday = ((data['weekday']?['trend'] as List<dynamic>?) ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      final weekend = ((data['weekend']?['trend'] as List<dynamic>?) ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+
+      setState(() {
+        _weekdayTrend = weekday;
+        _weekendTrend = weekend;
+        _compareLoading = false;
+        _compareMode = true;
+        // Auto-switch to line chart for comparison
+        _showBars = false;
+      });
+    } catch (e) {
+      setState(() => _compareLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load comparison: $e')),
+        );
+      }
     }
   }
 
@@ -125,7 +203,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
       insetPadding: const EdgeInsets.all(12),
       child: Container(
         width: double.maxFinite,
-        constraints: const BoxConstraints(maxHeight: 620),
+        constraints: const BoxConstraints(maxHeight: 660),
         padding: const EdgeInsets.all(16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -141,7 +219,9 @@ class _APTrendDialogState extends State<APTrendDialog> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        widget.apName,
+                        _compareMode
+                            ? '${widget.apName} — Compare'
+                            : widget.apName,
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
@@ -159,16 +239,25 @@ class _APTrendDialogState extends State<APTrendDialog> {
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: _dayType == 'weekend' ? Colors.orange[50] : Colors.blue[50],
+                    color: _compareMode
+                        ? Colors.purple[50]
+                        : _dayType == 'weekend'
+                            ? Colors.orange[50]
+                            : Colors.blue[50],
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    _dayLabel,
+                    _compareMode ? 'Week/Weekend' : _dayLabel,
                     style: TextStyle(
                       fontSize: 11,
-                      color: _dayType == 'weekend' ? Colors.orange[800] : Colors.blue[800],
+                      color: _compareMode
+                          ? Colors.purple[800]
+                          : _dayType == 'weekend'
+                              ? Colors.orange[800]
+                              : Colors.blue[800],
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -177,24 +266,29 @@ class _APTrendDialogState extends State<APTrendDialog> {
             ),
             const SizedBox(height: 6),
             Text(
-              '24-Hour Signal Strength Trend',
+              _compareMode
+                  ? 'Weekday vs Weekend Signal Comparison'
+                  : '24-Hour Signal Strength Trend',
               style: TextStyle(fontSize: 12, color: Colors.grey[500]),
             ),
 
             // Stats row
-            if (_stats.isNotEmpty) ...[
+            if (!_compareMode && _stats.isNotEmpty) ...[
               const SizedBox(height: 8),
               _buildStatsRow(),
             ],
 
-            // Accuracy row (from user feedback)
-            if (_accuracy.isNotEmpty && _accuracy['total_feedback'] != null && _accuracy['total_feedback'] > 0) ...[
+            // Accuracy row
+            if (!_compareMode &&
+                _accuracy.isNotEmpty &&
+                _accuracy['total_feedback'] != null &&
+                _accuracy['total_feedback'] > 0) ...[
               const SizedBox(height: 6),
               _buildAccuracyRow(),
             ],
 
-            // Accuracy vs Actual row (from clientes_processed.csv)
-            if (_accuracyVsActual != null) ...[
+            // Accuracy vs Actual row
+            if (!_compareMode && _accuracyVsActual != null) ...[
               const SizedBox(height: 6),
               _buildAccuracyVsActualRow(),
             ],
@@ -210,7 +304,8 @@ class _APTrendDialogState extends State<APTrendDialog> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.error_outline, color: Colors.red, size: 40),
+                              const Icon(Icons.error_outline,
+                                  color: Colors.red, size: 40),
                               const SizedBox(height: 8),
                               Text(
                                 'Failed to load trend',
@@ -219,13 +314,16 @@ class _APTrendDialogState extends State<APTrendDialog> {
                               const SizedBox(height: 4),
                               Text(
                                 _error!,
-                                style: const TextStyle(fontSize: 11, color: Colors.red),
+                                style: const TextStyle(
+                                    fontSize: 11, color: Colors.red),
                                 textAlign: TextAlign.center,
                               ),
                             ],
                           ),
                         )
-                      : _buildChart(),
+                      : _compareMode
+                          ? _buildCompareChart()
+                          : _buildChart(),
             ),
 
             const SizedBox(height: 8),
@@ -245,14 +343,14 @@ class _APTrendDialogState extends State<APTrendDialog> {
                     style: const TextStyle(fontSize: 12),
                   ),
                 ),
-                // Toggle actual average overlay (only if data available)
-                // In bar mode, enabling average auto-switches to line mode
-                if (_accuracyVsActual != null && _accuracyVsActual!['hourly'] != null)
+                // Toggle actual average overlay
+                if (!_compareMode &&
+                    _accuracyVsActual != null &&
+                    _accuracyVsActual!['hourly'] != null)
                   TextButton.icon(
                     onPressed: () {
                       setState(() {
                         _showAverage = !_showAverage;
-                        // Auto-switch to line chart when showing average
                         if (_showAverage && _showBars) {
                           _showBars = false;
                         }
@@ -264,12 +362,43 @@ class _APTrendDialogState extends State<APTrendDialog> {
                       color: Colors.green,
                     ),
                     label: Text(
-                      _showAverage ? 'Hide Average' : 'Show Average',
-                      style: const TextStyle(fontSize: 12, color: Colors.green),
+                      _showAverage ? 'Hide Avg' : 'Show Avg',
+                      style:
+                          const TextStyle(fontSize: 12, color: Colors.green),
+                    ),
+                  ),
+                // Compare toggle
+                if (!_isLoading && _error == null)
+                  TextButton.icon(
+                    onPressed: _compareLoading
+                        ? null
+                        : () {
+                            if (_compareMode) {
+                              // Exit comparison mode
+                              setState(() => _compareMode = false);
+                            } else {
+                              _loadCompare();
+                            }
+                          },
+                    icon: _compareLoading
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : Icon(
+                            _compareMode
+                                ? Icons.cancel_outlined
+                                : Icons.compare_arrows,
+                            size: 18,
+                            color: Colors.deepPurple,
+                          ),
+                    label: Text(
+                      _compareMode ? 'Exit Compare' : 'Compare',
+                      style: const TextStyle(
+                          fontSize: 12, color: Colors.deepPurple),
                     ),
                   ),
                 const Spacer(),
-                // Close button
                 SizedBox(
                   width: 100,
                   child: ElevatedButton(
@@ -304,18 +433,23 @@ class _APTrendDialogState extends State<APTrendDialog> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceAround,
           children: [
-            _buildStatItem(Icons.show_chart, 'Avg', '${avg?.toStringAsFixed(1) ?? "-"} dBm', _dbmToColor(avg?.toDouble() ?? -70)),
+            _buildStatItem(Icons.show_chart, 'Avg',
+                '${avg?.toStringAsFixed(1) ?? "-"} dBm', _dbmToColor(avg?.toDouble() ?? -70)),
             const SizedBox(width: 12),
-            _buildStatItem(Icons.arrow_upward, 'Best', '${maxDb?.toStringAsFixed(1) ?? "-"} dBm', Colors.green),
+            _buildStatItem(Icons.arrow_upward, 'Best',
+                '${maxDb?.toStringAsFixed(1) ?? "-"} dBm', Colors.green),
             const SizedBox(width: 12),
-            _buildStatItem(Icons.arrow_downward, 'Worst', '${minDb?.toStringAsFixed(1) ?? "-"} dBm', Colors.red),
+            _buildStatItem(Icons.arrow_downward, 'Worst',
+                '${minDb?.toStringAsFixed(1) ?? "-"} dBm', Colors.red),
             if (bestHour != null) ...[
               const SizedBox(width: 12),
-              _buildStatItem(Icons.access_time, 'Peak', '${bestHour}:00', Colors.blue),
+              _buildStatItem(
+                  Icons.access_time, 'Peak', '${bestHour}:00', Colors.blue),
             ],
             if (worstHour != null) ...[
               const SizedBox(width: 12),
-              _buildStatItem(Icons.access_time, 'Low', '${worstHour}:00', Colors.orange),
+              _buildStatItem(
+                  Icons.access_time, 'Low', '${worstHour}:00', Colors.orange),
             ],
           ],
         ),
@@ -379,7 +513,8 @@ class _APTrendDialogState extends State<APTrendDialog> {
     final mae = _accuracyVsActual!['mae'] as num?;
     final signalAccuracy = _accuracyVsActual!['signal_accuracy'] as num?;
     final statusAccuracy = _accuracyVsActual!['status_accuracy'] as num?;
-    final totalMeasurements = _accuracyVsActual!['total_measurements'] as int? ?? 0;
+    final totalMeasurements =
+        _accuracyVsActual!['total_measurements'] as int? ?? 0;
     final comparedHours = _accuracyVsActual!['compared_hours'] as int? ?? 0;
 
     return Container(
@@ -414,7 +549,9 @@ class _APTrendDialogState extends State<APTrendDialog> {
                         'Signal: ${(signalAccuracy * 100).toStringAsFixed(0)}%',
                         style: TextStyle(
                           fontSize: 10,
-                          color: signalAccuracy >= 0.7 ? Colors.green[700] : Colors.orange[700],
+                          color: signalAccuracy >= 0.7
+                              ? Colors.green[700]
+                              : Colors.orange[700],
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -424,7 +561,9 @@ class _APTrendDialogState extends State<APTrendDialog> {
                         'Status: ${(statusAccuracy * 100).toStringAsFixed(0)}%',
                         style: TextStyle(
                           fontSize: 10,
-                          color: statusAccuracy >= 0.8 ? Colors.green[700] : Colors.orange[700],
+                          color: statusAccuracy >= 0.8
+                              ? Colors.green[700]
+                              : Colors.orange[700],
                           fontWeight: FontWeight.w500,
                         ),
                       ),
@@ -454,13 +593,15 @@ class _APTrendDialogState extends State<APTrendDialog> {
         ),
         child: Text(
           '$label: ${(accuracy * 100).toStringAsFixed(0)}%',
-          style: TextStyle(fontSize: 9, color: color, fontWeight: FontWeight.w500),
+          style: TextStyle(
+              fontSize: 9, color: color, fontWeight: FontWeight.w500),
         ),
       ),
     );
   }
 
-  Widget _buildStatItem(IconData icon, String label, String value, Color color) {
+  Widget _buildStatItem(
+      IconData icon, String label, String value, Color color) {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -482,12 +623,12 @@ class _APTrendDialogState extends State<APTrendDialog> {
     );
   }
 
-  /// Get actual average data points for overlay (from accuracy_vs_actual.hourly)
+  /// Get actual average data points for overlay
   List<FlSpot>? _getActualSpots() {
     if (_accuracyVsActual == null) return null;
     final hourly = _accuracyVsActual!['hourly'] as List<dynamic>?;
     if (hourly == null || hourly.isEmpty) return null;
-    
+
     final spots = <FlSpot>[];
     for (final entry in hourly) {
       final h = (entry['hour'] as num).toDouble();
@@ -497,8 +638,8 @@ class _APTrendDialogState extends State<APTrendDialog> {
     return spots;
   }
 
+  /// Build the main single-trend chart (line or bars)
   Widget _buildChart() {
-    // Filter out null data points
     final validData = _trendData
         .where((d) => d['signal_db'] != null)
         .toList();
@@ -520,7 +661,6 @@ class _APTrendDialogState extends State<APTrendDialog> {
       if (db < minDb) minDb = db;
       if (db > maxDb) maxDb = db;
     }
-    // Also consider actual data range
     final actualSpots = _getActualSpots();
     if (actualSpots != null) {
       for (final spot in actualSpots) {
@@ -531,14 +671,13 @@ class _APTrendDialogState extends State<APTrendDialog> {
     minDb -= 3;
     maxDb += 3;
 
-    // Build line chart data points
     final spots = validData.map((d) {
       final hour = (d['hour'] as num).toDouble();
       final db = (d['signal_db'] as num).toDouble();
       return FlSpot(hour, db);
     }).toList();
 
-    // Build bar chart data — uses signal_db (dBm) shifted by +100 for positive display
+    // Bar chart data
     final barData = validData.map((d) {
       final hour = (d['hour'] as num).toDouble();
       final signalDb = (d['signal_db'] as num).toDouble();
@@ -550,104 +689,268 @@ class _APTrendDialogState extends State<APTrendDialog> {
             toY: barValue.clamp(0, 100),
             color: _dbmToColor(signalDb).withValues(alpha: 0.6),
             width: 6,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(2)),
+            borderRadius:
+                const BorderRadius.vertical(top: Radius.circular(2)),
           ),
         ],
       );
     }).toList();
 
     if (_showBars) {
-      return BarChart(
-        BarChartData(
-          gridData: FlGridData(
-            show: true,
-            drawVerticalLine: false,
-            getDrawingHorizontalLine: (value) => FlLine(
-              color: Colors.grey.withValues(alpha: 0.15),
-              strokeWidth: 1,
-            ),
-          ),
-          titlesData: FlTitlesData(
-            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-            leftTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                reservedSize: 36,
-                interval: 10,
-                getTitlesWidget: (value, meta) {
-                  final dbm = value.toInt() - 100;
-                  return Text(
-                    '$dbm',
-                    style: const TextStyle(fontSize: 9),
-                  );
-                },
-              ),
-            ),
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(
-                showTitles: true,
-                interval: 4,
-                reservedSize: 22,
-                getTitlesWidget: (value, meta) {
-                  if (value % 4 == 0) {
-                    return Text(
-                      '${value.toInt()}:00',
-                      style: const TextStyle(fontSize: 10),
-                    );
-                  }
-                  return const SizedBox.shrink();
-                },
-              ),
-            ),
-          ),
-          borderData: FlBorderData(
-            show: true,
-            border: Border.all(color: Colors.grey.withValues(alpha: 0.2)),
-          ),
-          barGroups: barData,
-          barTouchData: BarTouchData(
-            touchTooltipData: BarTouchTooltipData(
-              getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                final data = validData.firstWhere(
-                  (d) => (d['hour'] as num).toInt() == group.x,
-                );
-                final db = (data['signal_db'] as num).toDouble();
-                final status = data['predicted_status'] as String? ?? _dbmToQuality(db);
-                
-                // Check if actual data exists for this hour
-                String actualStr = '';
-                if (_showAverage && _accuracyVsActual != null) {
-                  final hourly = _accuracyVsActual!['hourly'] as List<dynamic>?;
-                  if (hourly != null) {
-                    for (final entry in hourly) {
-                      if ((entry['hour'] as num).toInt() == group.x) {
-                        final actualDb = (entry['actual_mean'] as num).toDouble();
-                        final diff = (entry['diff'] as num).toDouble();
-                        final interp = entry['interpolated'] == true ? ' (interpolated)' : '';
-                        actualStr = '\nAvg: ${actualDb.toStringAsFixed(1)} dBm$interp\nDiff: ${diff.toStringAsFixed(1)} dBm';
-                        break;
-                      }
-                    }
-                  }
-                }
-                
-                return BarTooltipItem(
-                  '${group.x}:00\n${db.toStringAsFixed(1)} dBm\nStatus: $status$actualStr',
-                  TextStyle(
-                    color: _dbmToColor(db),
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
-                  ),
-                );
-              },
-            ),
-          ),
+      return _buildBarChart(barData, validData);
+    }
+
+    return _buildLineChart(spots, validData, minDb, maxDb, actualSpots);
+  }
+
+  /// Build the comparison chart (weekday vs weekend dual-line)
+  Widget _buildCompareChart() {
+    if (_weekdayTrend.isEmpty && _weekendTrend.isEmpty) {
+      return Center(
+        child: Text(
+          'No comparison data available',
+          style: TextStyle(color: Colors.grey[500]),
         ),
       );
     }
 
-    // Line chart mode
+    // Compute Y range from both datasets
+    double minDb = -97;
+    double maxDb = -22;
+    for (final list in [_weekdayTrend, _weekendTrend]) {
+      for (final d in list) {
+        final db = (d['signal_db'] as num?)?.toDouble();
+        if (db != null) {
+          if (db < minDb) minDb = db;
+          if (db > maxDb) maxDb = db;
+        }
+      }
+    }
+    minDb -= 3;
+    maxDb += 3;
+
+    // Build spots from both datasets
+    final weekdaySpots = _weekdayTrend
+        .where((d) => d['signal_db'] != null)
+        .map((d) => FlSpot(
+              (d['hour'] as num).toDouble(),
+              (d['signal_db'] as num).toDouble(),
+            ))
+        .toList();
+
+    final weekendSpots = _weekendTrend
+        .where((d) => d['signal_db'] != null)
+        .map((d) => FlSpot(
+              (d['hour'] as num).toDouble(),
+              (d['signal_db'] as num).toDouble(),
+            ))
+        .toList();
+
+    // Compute stats for both
+    String weekdayAvg = '-', weekendAvg = '-';
+    if (weekdaySpots.isNotEmpty) {
+      final avg = weekdaySpots.map((s) => s.y).reduce((a, b) => a + b) /
+          weekdaySpots.length;
+      weekdayAvg = '${avg.toStringAsFixed(1)} dBm';
+    }
+    if (weekendSpots.isNotEmpty) {
+      final avg = weekendSpots.map((s) => s.y).reduce((a, b) => a + b) /
+          weekendSpots.length;
+      weekendAvg = '${avg.toStringAsFixed(1)} dBm';
+    }
+
+    return Column(
+      children: [
+        // Comparison legend
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.grey[50],
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.grey[200]!),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildCompareLegendItem('Weekday', Colors.blue, weekdayAvg),
+              _buildCompareLegendItem('Weekend', Colors.orange, weekendAvg),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Dual-line chart
+        Expanded(
+          child: LineChart(
+            LineChartData(
+              gridData: FlGridData(
+                show: true,
+                drawVerticalLine: false,
+                horizontalInterval: 10,
+                getDrawingHorizontalLine: (value) => FlLine(
+                  color: Colors.grey.withValues(alpha: 0.15),
+                  strokeWidth: 1,
+                ),
+              ),
+              titlesData: FlTitlesData(
+                topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false)),
+                bottomTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    interval: 4,
+                    reservedSize: 22,
+                    getTitlesWidget: (value, meta) {
+                      if (value % 4 == 0) {
+                        return Text(
+                          '${value.toInt()}:00',
+                          style: const TextStyle(fontSize: 10),
+                        );
+                      }
+                      return const SizedBox.shrink();
+                    },
+                  ),
+                ),
+                leftTitles: AxisTitles(
+                  sideTitles: SideTitles(
+                    showTitles: true,
+                    reservedSize: 36,
+                    interval: 10,
+                    getTitlesWidget: (value, meta) {
+                      return Text(
+                        '${value.toInt()} dBm',
+                        style: const TextStyle(fontSize: 9),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              borderData: FlBorderData(
+                show: true,
+                border: Border.all(color: Colors.grey.withValues(alpha: 0.2)),
+              ),
+              minX: 0,
+              maxX: 23,
+              minY: minDb,
+              maxY: maxDb,
+              lineBarsData: [
+                // Weekday line (blue)
+                LineChartBarData(
+                  spots: weekdaySpots,
+                  isCurved: true,
+                  curveSmoothness: 0.3,
+                  color: Colors.blue,
+                  barWidth: 2.5,
+                  isStrokeCapRound: true,
+                  dotData: FlDotData(
+                    show: true,
+                    getDotPainter: (spot, percent, barData, index) {
+                      return FlDotCirclePainter(
+                        radius: 3,
+                        color: Colors.blue,
+                        strokeWidth: 1.5,
+                        strokeColor: Colors.white,
+                      );
+                    },
+                  ),
+                  belowBarData: BarAreaData(
+                    show: true,
+                    color: Colors.blue.withValues(alpha: 0.06),
+                  ),
+                ),
+                // Weekend line (orange)
+                LineChartBarData(
+                  spots: weekendSpots,
+                  isCurved: true,
+                  curveSmoothness: 0.3,
+                  color: Colors.orange,
+                  barWidth: 2.5,
+                  isStrokeCapRound: true,
+                  dashArray: [6, 3],
+                  dotData: FlDotData(
+                    show: true,
+                    getDotPainter: (spot, percent, barData, index) {
+                      return FlDotCirclePainter(
+                        radius: 3,
+                        color: Colors.orange,
+                        strokeWidth: 1.5,
+                        strokeColor: Colors.white,
+                      );
+                    },
+                  ),
+                  belowBarData: BarAreaData(
+                    show: true,
+                    color: Colors.orange.withValues(alpha: 0.06),
+                  ),
+                ),
+              ],
+              lineTouchData: LineTouchData(
+                touchTooltipData: LineTouchTooltipData(
+                  getTooltipItems: (touchedSpots) {
+                    return touchedSpots.map((spot) {
+                      final label = spot.barIndex == 0 ? 'Weekday' : 'Weekend';
+                      final db = spot.y;
+                      return LineTooltipItem(
+                        '${spot.x.toInt()}:00\n$label: ${db.toStringAsFixed(1)} dBm',
+                        TextStyle(
+                          color: spot.barIndex == 0
+                              ? Colors.blue
+                              : Colors.orange,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      );
+                    }).toList();
+                  },
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCompareLegendItem(
+      String label, Color color, String avgValue) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+        const SizedBox(width: 6),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(label,
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: color)),
+            Text(avgValue,
+                style: TextStyle(fontSize: 9, color: Colors.grey[600])),
+          ],
+        ),
+      ],
+    );
+  }
+
+  /// Build line chart (reused for single-trend mode)
+  Widget _buildLineChart(
+    List<FlSpot> spots,
+    List<Map<String, dynamic>> validData,
+    double minDb,
+    double maxDb,
+    List<FlSpot>? actualSpots,
+  ) {
     return LineChart(
       LineChartData(
         gridData: FlGridData(
@@ -660,8 +963,10 @@ class _APTrendDialogState extends State<APTrendDialog> {
           ),
         ),
         titlesData: FlTitlesData(
-          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: true,
@@ -726,7 +1031,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
               color: Colors.blue.withValues(alpha: 0.08),
             ),
           ),
-          // Actual average line (green, dashed) - only when toggled on
+          // Actual average line (green, dashed)
           if (_showAverage && actualSpots != null)
             LineChartBarData(
               spots: actualSpots,
@@ -755,31 +1060,34 @@ class _APTrendDialogState extends State<APTrendDialog> {
               return touchedSpots.map((spot) {
                 final db = spot.y;
                 final quality = _dbmToQuality(db);
-                // Find the matching data point to get predicted_status
                 final matchingData = validData.where(
                   (d) => (d['hour'] as num).toInt() == spot.x.toInt(),
                 );
                 final status = matchingData.isNotEmpty
-                    ? (matchingData.first['predicted_status'] as String? ?? quality)
+                    ? (matchingData.first['predicted_status'] as String? ??
+                        quality)
                     : quality;
-                
-                // Check if actual data exists for this hour
+
                 String actualStr = '';
                 if (_showAverage && _accuracyVsActual != null) {
-                  final hourly = _accuracyVsActual!['hourly'] as List<dynamic>?;
+                  final hourly =
+                      _accuracyVsActual!['hourly'] as List<dynamic>?;
                   if (hourly != null) {
                     for (final entry in hourly) {
                       if ((entry['hour'] as num).toInt() == spot.x.toInt()) {
-                        final actualDb = (entry['actual_mean'] as num).toDouble();
+                        final actualDb =
+                            (entry['actual_mean'] as num).toDouble();
                         final diff = (entry['diff'] as num).toDouble();
-                        final interp = entry['interpolated'] == true ? ' (interpolated)' : '';
-                        actualStr = '\nAvg: ${actualDb.toStringAsFixed(1)} dBm$interp\nDiff: ${diff.toStringAsFixed(1)} dBm';
+              final interp =
+                  entry['interpolated'] == true ? ' (interpolated)' : '';
+              actualStr =
+                  '\nAvg: ${actualDb.toStringAsFixed(1)} dBm$interp\nDiff: ${diff.toStringAsFixed(1)} dBm';
                         break;
                       }
                     }
                   }
                 }
-                
+
                 return LineTooltipItem(
                   '${spot.x.toInt()}:00\n${db.toStringAsFixed(1)} dBm\nStatus: $status$actualStr',
                   TextStyle(
@@ -789,6 +1097,108 @@ class _APTrendDialogState extends State<APTrendDialog> {
                   ),
                 );
               }).toList();
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Build bar chart
+  Widget _buildBarChart(
+    List<BarChartGroupData> barData,
+    List<Map<String, dynamic>> validData,
+  ) {
+    return BarChart(
+      BarChartData(
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          getDrawingHorizontalLine: (value) => FlLine(
+            color: Colors.grey.withValues(alpha: 0.15),
+            strokeWidth: 1,
+          ),
+        ),
+        titlesData: FlTitlesData(
+          topTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          rightTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: 36,
+              interval: 10,
+              getTitlesWidget: (value, meta) {
+                final dbm = value.toInt() - 100;
+                return Text(
+                  '$dbm',
+                  style: const TextStyle(fontSize: 9),
+                );
+              },
+            ),
+          ),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              interval: 4,
+              reservedSize: 22,
+              getTitlesWidget: (value, meta) {
+                if (value % 4 == 0) {
+                  return Text(
+                    '${value.toInt()}:00',
+                    style: const TextStyle(fontSize: 10),
+                  );
+                }
+                return const SizedBox.shrink();
+              },
+            ),
+          ),
+        ),
+        borderData: FlBorderData(
+          show: true,
+          border: Border.all(color: Colors.grey.withValues(alpha: 0.2)),
+        ),
+        barGroups: barData,
+        barTouchData: BarTouchData(
+          touchTooltipData: BarTouchTooltipData(
+            getTooltipItem: (group, groupIndex, rod, rodIndex) {
+              final data = validData.firstWhere(
+                (d) => (d['hour'] as num).toInt() == group.x,
+              );
+              final db = (data['signal_db'] as num).toDouble();
+              final status =
+                  data['predicted_status'] as String? ?? _dbmToQuality(db);
+
+              String actualStr = '';
+              if (_showAverage && _accuracyVsActual != null) {
+                final hourly =
+                    _accuracyVsActual!['hourly'] as List<dynamic>?;
+                if (hourly != null) {
+                  for (final entry in hourly) {
+                    if ((entry['hour'] as num).toInt() == group.x) {
+                      final actualDb =
+                          (entry['actual_mean'] as num).toDouble();
+                      final diff = (entry['diff'] as num).toDouble();
+                      final interp = entry['interpolated'] == true
+                          ? ' (interpolated)'
+                          : '';
+                      actualStr =
+                          '\nAvg: ${actualDb.toStringAsFixed(1)} dBm$interp\nDiff: ${diff.toStringAsFixed(1)} dBm';
+                      break;
+                    }
+                  }
+                }
+              }
+
+              return BarTooltipItem(
+                '${group.x}:00\n${db.toStringAsFixed(1)} dBm\nStatus: $status$actualStr',
+                TextStyle(
+                  color: _dbmToColor(db),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
+              );
             },
           ),
         ),
