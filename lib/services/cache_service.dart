@@ -12,6 +12,25 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// ALL SharedPreferences access is wrapped in try-catch to prevent
 /// `map: failed to execute setitem on storage` errors.
 class CacheService {
+  /// Bump this on deploy to invalidate ALL persistent caches.
+  static const int cacheVersion = 2;
+  static const String _cacheVersionKey = '_cache_service_version';
+
+  /// Call at app startup to wipe stale persistent caches from an older version.
+  static Future<void> init() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final stored = prefs.getInt(_cacheVersionKey);
+      if (stored != cacheVersion) {
+        debugPrint('CacheService: version changed $stored → $cacheVersion, clearing persistent cache');
+        await clearAll();
+        await prefs.setInt(_cacheVersionKey, cacheVersion);
+      }
+    } catch (e) {
+      debugPrint('CacheService.init: $e');
+    }
+  }
+
   // Memory cache
   static final Map<String, _CacheEntry> _memoryCache = {};
 

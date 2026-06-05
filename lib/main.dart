@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:wifers_app/pages/my_home_page.dart';
+import 'package:wifers_app/services/cache_service.dart';
 import 'package:wifers_app/services/storage_service.dart';
 
 void main() async {
@@ -14,6 +15,14 @@ void main() async {
     await StorageService.startupCleanup();
   } catch (e) {
     debugPrint('main: startupCleanup failed ($e) — continuing');
+  }
+
+  // Invalidate persistent caches from an older code version.
+  // This ensures the new accuracy_vs_actual data is fetched fresh.
+  try {
+    await CacheService.init();
+  } catch (e) {
+    debugPrint('main: CacheService.init failed ($e) — continuing');
   }
 
   runApp(const MyApp());
