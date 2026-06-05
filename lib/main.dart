@@ -1,8 +1,21 @@
 import 'package:flutter/material.dart';
 
 import 'package:wifers_app/pages/my_home_page.dart';
+import 'package:wifers_app/services/storage_service.dart';
 
-void main() {
+void main() async {
+  // Bind Flutter to ensure plugins (SharedPreferences) are available.
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Proactively clean up stale localStorage entries so that
+  // SharedPreferences / `map: failed to execute setitem on storage`
+  // errors are minimised during normal app usage.
+  try {
+    await StorageService.startupCleanup();
+  } catch (e) {
+    debugPrint('main: startupCleanup failed ($e) — continuing');
+  }
+
   runApp(const MyApp());
 }
 
