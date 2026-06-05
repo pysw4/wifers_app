@@ -239,12 +239,18 @@ def _load_actual_signal_data(force_reload: bool = False):
         with open(json_path) as f:
             raw = json.load(f)
         
-        # Convert string hour keys back to int for consistency
+        # Convert string hour keys back to int for consistency, sanitize NaN
         for ap_key, ap_data in raw.items():
             hourly = ap_data.get("hourly", {})
             converted_hourly = {}
             for h_str, h_data in hourly.items():
-                converted_hourly[int(h_str)] = h_data
+                clean_hdata = {}
+                for k, v in h_data.items():
+                    if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                        clean_hdata[k] = None
+                    else:
+                        clean_hdata[k] = v
+                converted_hourly[int(h_str)] = clean_hdata
             _actual_signal_data[ap_key] = {
                 "hourly": converted_hourly,
                 "total_measurements": ap_data["total_measurements"],
@@ -350,7 +356,7 @@ def _load_predictor5() -> bool:
         _predictor5_scaler = joblib.load(str(model_dir / "scaler.joblib"))
         _predictor5_le_ap = joblib.load(str(model_dir / "label_encoder.joblib"))
 
-        # Rebuild LSTM model
+        # Rebuild LSTM model — v2 architecture (dropout inside LSTM layers, no separate drop)
         lstm1 = _predictor5_meta.get('lstm_units_1', 80)
         lstm2 = _predictor5_meta.get('lstm_units_2', 48)
         dense_u = _predictor5_meta.get('dense_units', 32)
@@ -359,25 +365,22 @@ def _load_predictor5() -> bool:
 
         device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
 
-        # Define the same architecture as in run_predictor5.py
         class LSTMBookingPredictor(nn.Module):
             def __init__(self, input_size, hidden1, hidden2, dense_units, output_size):
                 super().__init__()
                 self.lstm1 = nn.LSTM(input_size, hidden1, batch_first=True)
-                self.drop1 = nn.Dropout(0.25)
                 self.lstm2 = nn.LSTM(hidden1, hidden2, batch_first=True)
-                self.drop2 = nn.Dropout(0.25)
                 self.fc1 = nn.Linear(hidden2, dense_units)
                 self.relu = nn.ReLU()
+                self.drop = nn.Dropout(0.3)
                 self.fc2 = nn.Linear(dense_units, output_size)
 
             def forward(self, x):
                 x, _ = self.lstm1(x)
-                x = self.drop1(x)
                 x, _ = self.lstm2(x)
-                x = self.drop2(x)
                 x = x[:, -1, :]
                 x = self.relu(self.fc1(x))
+                x = self.drop(x)
                 x = self.fc2(x)
                 return x
 
@@ -400,10 +403,23 @@ def _load_predictor5() -> bool:
         return False
 
 
+# Flat profile constants: 7 days × 24 hours × 10 features
+PROFILE_DAYS = 7
+PROFILE_HOURS = 24
+PROFILE_FEATURES = 10
+PROFILE_FEATURE_NAMES = ['signal_score', 'signal_strength', 'signal_db', 'snr',
+                         'cpu_utilization', 'mem_usage', 'client_count', 'health',
+                         'speed', 'maxspeed']
+
+
 def _load_predictor5_ap_profiles() -> Optional[dict]:
     """Load precomputed AP hourly profiles for LSTM window construction.
 
-    Returns dict: {ap_name: {day_of_week: {hour: {feat: val, ...}}}}
+    Returns dict: {ap_name: [1680 floats]}, where each AP entry is a flat array
+    of 7×24×10 = 1680 values. The 10 features per hour are:
+      signal_score, signal_strength, signal_db, snr, cpu_utilization,
+      mem_usage, client_count, health, speed, maxspeed
+    Access: arr[(dow * 24 + hour) * 10 + feature_index]
     """
     global _predictor5_ap_profiles
     if _predictor5_ap_profiles is not None:
@@ -418,7 +434,7 @@ def _load_predictor5_ap_profiles() -> Optional[dict]:
         import json
         with open(profile_path) as f:
             _predictor5_ap_profiles = json.load(f)
-        print(f"[INFO] Predictor5_0 AP profiles loaded ({len(_predictor5_ap_profiles)} APs)")
+        print(f"[INFO] Predictor5_0 AP profiles loaded ({len(_predictor5_ap_profiles)} APs, flat array format)")
         return _predictor5_ap_profiles
     except Exception as e:
         print(f"[ERROR] Failed to load Predictor5_0 profiles: {e}")
@@ -448,15 +464,46 @@ def _map_score_to_dbm(score: float) -> float:
     return max(-97.0, min(-34.0, dbm))
 
 
+# Map numeric feature names to indices in flat profile array (10 features)
+PROFILE_FEATURE_TO_IDX = {
+    'signal_score': 0, 'signal_strength': 1, 'signal_db': 2, 'snr': 3,
+    'cpu_utilization': 4, 'mem_usage': 5, 'client_count': 6, 'health': 7,
+    'speed': 8, 'maxspeed': 9,
+}
+
+
+def _get_profile_feat(profile_arr: list, dow: int, hour: int, feat_name: str,
+                      default: float = 0.5) -> float:
+    """Get a single feature value from flat profile array.
+    
+    profile_arr: list of 1680 floats (7 days × 24 hours × 10 features)
+    feat_name: one of PROFILE_FEATURE_NAMES
+    """
+    feat_idx = PROFILE_FEATURE_TO_IDX.get(feat_name)
+    if feat_idx is None or len(profile_arr) < 1680:
+        return default
+    idx = (dow * 24 + hour) * 10 + feat_idx
+    val = profile_arr[idx]
+    if val is None or (isinstance(val, float) and (math.isnan(val) or math.isinf(val))):
+        return default
+    return float(val)
+
+
 def _build_lstm_window(ap_code: int, ap_profiles: dict, matched_key: str,
                         numeric_feats: list, all_feats: list,
                         target_dow: int, start_hour: int) -> Optional[list]:
     """Build a 24-row feature window for LSTM inference.
     
     Each row covers one hour in the 24h window before `start_hour`.
+    Profiles are flat arrays: [1680 floats] per AP.
     """
     import numpy as np
     W = 24
+    
+    profile_arr = ap_profiles.get(matched_key, [])
+    if len(profile_arr) < 1680:
+        profile_arr = []
+    
     rows = []
     for offset in range(W):
         abs_hour = start_hour - W + offset
@@ -475,17 +522,18 @@ def _build_lstm_window(ap_code: int, ap_profiles: dict, matched_key: str,
             'day_cos': np.cos(2 * np.pi * actual_dow / 7),
         }
         
-        ap_profile = ap_profiles.get(matched_key, {})
-        dow_str = str(actual_dow)
-        hour_str = str(actual_hour)
-        hour_data = ap_profile.get(dow_str, {}).get(hour_str, None)
-        
-        if hour_data:
+        if profile_arr:
             for feat in numeric_feats:
-                row[feat] = float(hour_data.get(feat, 0.5))
+                row[feat] = _get_profile_feat(profile_arr, actual_dow, actual_hour, feat, 0.5)
         else:
             for feat in numeric_feats:
                 row[feat] = 0.5
+        
+        # signal_score (target) must also be in the window for the scaler even though we don't predict from it
+        if profile_arr:
+            row['signal_score'] = _get_profile_feat(profile_arr, actual_dow, actual_hour, 'signal_score', 0.5)
+        else:
+            row['signal_score'] = 0.5
         
         rows.append(row)
     return rows
@@ -645,15 +693,11 @@ def _predict_lstm_for_booking(ap_name: str, date_str: str, start_hour: int, end_
 
     # Build 24h window: timestamps [start_hour-24 .. start_hour-1]
     feat_rows = []
+    profile_arr = ap_profiles.get(matched_key, [])
+    if len(profile_arr) < 1680:
+        profile_arr = []
+
     for offset in range(W):
-        ts_hour = (start_hour - W + offset) % 24
-        ts_dow = dow
-        # Handle day boundary: if ts_hour wraps, adjust dow
-        hour_delta = start_hour - (W - offset)
-        actual_dow = (dow - 1) if hour_delta < 0 else dow
-        # Actually simpler: compute absolute hour offset
-        # Hour 0 of window = start_hour - 24 hours
-        # Each step = start_hour - 24 + offset
         abs_hour = start_hour - W + offset
         actual_dow = (dow - 1) if abs_hour < 0 else dow
         if abs_hour < 0:
@@ -670,19 +714,18 @@ def _predict_lstm_for_booking(ap_name: str, date_str: str, start_hour: int, end_
             'day_cos': np.cos(2 * np.pi * actual_dow / 7),
         }
 
-        # Fill numeric features from profiles
-        ap_profile = ap_profiles.get(matched_key, {})
-        dow_str = str(actual_dow)
-        dow_data = ap_profile.get(dow_str, {})
-        hour_str = str(actual_hour)
-        hour_data = dow_data.get(hour_str, None)
-
-        if hour_data:
+        if profile_arr:
             for feat in numeric_feats:
-                row[feat] = float(hour_data.get(feat, 0.5))
+                row[feat] = _get_profile_feat(profile_arr, actual_dow, actual_hour, feat, 0.5)
         else:
             for feat in numeric_feats:
                 row[feat] = 0.5
+
+        # signal_score (target) must also be in the window for the scaler
+        if profile_arr:
+            row['signal_score'] = _get_profile_feat(profile_arr, actual_dow, actual_hour, 'signal_score', 0.5)
+        else:
+            row['signal_score'] = 0.5
 
         feat_rows.append(row)
 
@@ -1478,7 +1521,7 @@ async def get_ap_daily_trend(ap_name: str):
             signal_values.append(signal_db)
     
     if source == "unknown":
-        # 2) Fallback: real measured averages from profiles
+        # 2) Fallback: real measured averages from profiles (flat array format)
         ap_profiles = _load_predictor5_ap_profiles()
         ap_key = ap_name.strip().lower()
         matched_profile_key = None
@@ -1490,14 +1533,9 @@ async def get_ap_daily_trend(ap_name: str):
         
         if matched_profile_key is not None:
             source = "profiles"
-            profile_data = ap_profiles[matched_profile_key]
-            dow_str = str(day_of_week)
+            profile_arr = ap_profiles[matched_profile_key]
             for hour in range(24):
-                hour_str = str(hour)
-                if dow_str in profile_data and hour_str in profile_data[dow_str]:
-                    signal_db = float(profile_data[dow_str][hour_str].get('signal_db', -70.0))
-                else:
-                    signal_db = -70.0
+                signal_db = _get_profile_feat(profile_arr, day_of_week, hour, 'signal_db', -70.0)
                 quality_info = _dbm_to_quality(signal_db)
                 status = _dbm_to_status(signal_db)
                 status_conf = _dbm_to_status_confidence(signal_db)
@@ -1582,7 +1620,7 @@ async def get_ap_daily_trend(ap_name: str):
         # Build a complete 0..23 array, filling gaps with linear interpolation
         full_actual = {}
         # hourly_actual keys are already int (converted in _load_actual_signal_data)
-        actual_hours = sorted(hourly_actual.keys())
+        actual_hours = sorted(h for h in hourly_actual.keys() if hourly_actual[h].get("actual_mean") is not None)
         
         if len(actual_hours) >= 2:
             # Interpolate between known points
@@ -1661,10 +1699,15 @@ async def get_ap_daily_trend(ap_name: str):
                 })
         
         if diffs:
-            mae = sum(diffs) / len(diffs)
-            within_5db = sum(1 for d in diffs if d <= 5)
-            within_10db = sum(1 for d in diffs if d <= 10)
-            signal_accuracy = within_5db / len(diffs)
+            # Filter out NaN values from diffs
+            clean_diffs = [d for d in diffs if d is not None and not (isinstance(d, float) and math.isnan(d))]
+            if len(clean_diffs) > 0:
+                mae = sum(clean_diffs) / len(clean_diffs)
+            else:
+                mae = None
+            within_5db = sum(1 for d in clean_diffs if d <= 5)
+            within_10db = sum(1 for d in clean_diffs if d <= 10)
+            signal_accuracy = within_5db / len(clean_diffs) if len(clean_diffs) > 0 else None
             
             # Also compute status accuracy (Up/Down based on -75 threshold)
             status_correct = 0
@@ -1678,15 +1721,30 @@ async def get_ap_daily_trend(ap_name: str):
                         status_correct += 1
                     status_total += 1
             
+            # Sanitize hourly list: replace any NaN/Inf with None
+            def _sanitize_val(v):
+                if v is None:
+                    return None
+                if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                    return None
+                return v
+            
+            sanitized_hourly = []
+            for entry in actual_hourly_list:
+                sanitized_entry = {}
+                for k, v in entry.items():
+                    sanitized_entry[k] = _sanitize_val(v)
+                sanitized_hourly.append(sanitized_entry)
+            
             accuracy_vs_actual = {
-                "mae": round(mae, 1),
-                "signal_accuracy": round(signal_accuracy, 3),
+                "mae": _sanitize_val(round(mae, 1)) if mae is not None else None,
+                "signal_accuracy": _sanitize_val(round(signal_accuracy, 3)) if signal_accuracy is not None else None,
                 "within_5db": within_5db,
                 "within_10db": within_10db,
-                "compared_hours": len(diffs),
+                "compared_hours": len(clean_diffs),
                 "total_measurements": actual_data["total_measurements"],
                 "status_accuracy": round(status_correct / status_total, 3) if status_total > 0 else None,
-                "hourly": actual_hourly_list,
+                "hourly": sanitized_hourly,
             }
 
     result = {
