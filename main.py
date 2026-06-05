@@ -1960,20 +1960,24 @@ async def get_ap_signal_accuracy(ap_name: str):
         
         if hour in hourly_actual:
             actual_db = hourly_actual[hour]["actual_mean"]
-            actual_status = _dbm_to_status(actual_db)
-            actual_quality = _dbm_to_quality(actual_db)["quality"]
-            diff = abs(pred_db - actual_db)
-            diffs.append(diff)
-            
-            if pred_status == actual_status:
-                status_correct += 1
-            status_total += 1
-            
-            entry["actual_db"] = actual_db
-            entry["actual_status"] = actual_status
-            entry["actual_quality"] = actual_quality
-            entry["actual_samples"] = hourly_actual[hour]["samples"]
-            entry["diff"] = round(diff, 1)
+            if actual_db is not None:
+                actual_status = _dbm_to_status(actual_db)
+                actual_quality = _dbm_to_quality(actual_db)["quality"]
+                diff = abs(pred_db - actual_db)
+                diffs.append(diff)
+                
+                if pred_status == actual_status:
+                    status_correct += 1
+                status_total += 1
+                
+                entry["actual_db"] = actual_db
+                entry["actual_status"] = actual_status
+                entry["actual_quality"] = actual_quality
+                entry["actual_samples"] = hourly_actual[hour]["samples"]
+                entry["diff"] = round(diff, 1)
+            else:
+                entry["actual_db"] = None
+                entry["diff"] = None
         else:
             entry["actual_db"] = None
             entry["diff"] = None
