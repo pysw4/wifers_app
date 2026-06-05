@@ -8,7 +8,7 @@ import 'package:wifers_app/services/cache_service.dart';
 /// Features:
 /// - Line chart / Bar chart toggle
 /// - Actual average overlay (from clientes_processed.csv)
-/// - **Weekday vs Weekend comparison mode** (uses /compare endpoint)
+/// - **Predicted vs Historical comparison mode** (uses /compare endpoint)
 /// - **CacheService** caching for faster re-open
 class APTrendDialog extends StatefulWidget {
   final String apName;
@@ -37,11 +37,14 @@ class _APTrendDialogState extends State<APTrendDialog> {
   bool _showBars = true;
   bool _showAverage = false;
 
-  // -- Comparison mode state --
+  // -- Comparison mode state (Predicted vs Historical average) --
   bool _compareMode = false;
   bool _compareLoading = false;
-  List<Map<String, dynamic>> _weekdayTrend = [];
-  List<Map<String, dynamic>> _weekendTrend = [];
+  List<Map<String, dynamic>> _predictedTrend = [];   // today's prediction
+  List<Map<String, dynamic>> _historicalTrend = [];  // historical actual average
+  bool _hasHistorical = false;
+  int _totalMeasurements = 0;
+  String _predictedSource = '';
 
   /// Map backend day names ('mon'/'tue'/.../'sun') to display labels
   static const Map<String, String> _dayLabels = {
@@ -131,7 +134,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
     }
   }
 
-  /// Load weekday vs weekend comparison data
+  /// Load predicted vs historical comparison data
   Future<void> _loadCompare() async {
     final cacheKey = 'trend_compare_${widget.apName.toLowerCase()}';
     const ttl = Duration(minutes: 15);
@@ -153,16 +156,19 @@ class _APTrendDialogState extends State<APTrendDialog> {
         CacheService.set(cacheKey, data);
       }
 
-      final weekday = ((data['weekday']?['trend'] as List<dynamic>?) ?? [])
+      final predicted = ((data['predicted'] as List<dynamic>?) ?? [])
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
-      final weekend = ((data['weekend']?['trend'] as List<dynamic>?) ?? [])
+      final historical = ((data['historical'] as List<dynamic>?) ?? [])
           .map((e) => Map<String, dynamic>.from(e as Map))
           .toList();
 
       setState(() {
-        _weekdayTrend = weekday;
-        _weekendTrend = weekend;
+        _predictedTrend = predicted;
+        _historicalTrend = historical;
+        _hasHistorical = data['has_historical'] == true;
+        _totalMeasurements = data['total_measurements'] as int? ?? 0;
+        _predictedSource = data['predicted_source'] as String? ?? '';
         _compareLoading = false;
         _compareMode = true;
         // Auto-switch to line chart for comparison
@@ -249,8 +255,8 @@ class _APTrendDialogState extends State<APTrendDialog> {
                             : Colors.blue[50],
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: Text(
-                    _compareMode ? 'Week/Weekend' : _dayLabel,
+              child: Text(
+                _compareMode ? 'Pred vs Hist' : _dayLabel,
                     style: TextStyle(
                       fontSize: 11,
                       color: _compareMode
@@ -267,7 +273,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
             const SizedBox(height: 6),
             Text(
               _compareMode
-                  ? 'Weekday vs Weekend Signal Comparison'
+                  ? 'Predicted vs Historical Average Comparison'
                   : '24-Hour Signal Strength Trend',
               style: TextStyle(fontSize: 12, color: Colors.grey[500]),
             ),
@@ -703,9 +709,9 @@ class _APTrendDialogState extends State<APTrendDialog> {
     return _buildLineChart(spots, validData, minDb, maxDb, actualSpots);
   }
 
-  /// Build the comparison chart (weekday vs weekend dual-line)
+  /// Build the comparison chart (Predicted vs Historical dual-line)
   Widget _buildCompareChart() {
-    if (_weekdayTrend.isEmpty && _weekendTrend.isEmpty) {
+    if (_predictedTrend.isEmpty) {
       return Center(
         child: Text(
           'No comparison data available',
@@ -717,20 +723,21 @@ class _APTrendDialogState extends State<APTrendDialog> {
     // Compute Y range from both datasets
     double minDb = -97;
     double maxDb = -22;
-    for (final list in [_weekdayTrend, _weekendTrend]) {
-      for (final d in list) {
-        final db = (d['signal_db'] as num?)?.toDouble();
-        if (db != null) {
-          if (db < minDb) minDb = db;
-          if (db > maxDb) maxDb = db;
-        }
-      }
+    for (final d in _predictedTrend) {
+      final db = (d['signal_db'] as num?)?.toDouble();
+      if (db != null && db < minDb) minDb = db;
+      if (db != null && db > maxDb) maxDb = db;
+    }
+    for (final d in _historicalTrend) {
+      final db = (d['signal_db'] as num?)?.toDouble();
+      if (db != null && db < minDb) minDb = db;
+      if (db != null && db > maxDb) maxDb = db;
     }
     minDb -= 3;
     maxDb += 3;
 
     // Build spots from both datasets
-    final weekdaySpots = _weekdayTrend
+    final predictedSpots = _predictedTrend
         .where((d) => d['signal_db'] != null)
         .map((d) => FlSpot(
               (d['hour'] as num).toDouble(),
@@ -738,7 +745,7 @@ class _APTrendDialogState extends State<APTrendDialog> {
             ))
         .toList();
 
-    final weekendSpots = _weekendTrend
+    final historicalSpots = _historicalTrend
         .where((d) => d['signal_db'] != null)
         .map((d) => FlSpot(
               (d['hour'] as num).toDouble(),
@@ -747,17 +754,21 @@ class _APTrendDialogState extends State<APTrendDialog> {
         .toList();
 
     // Compute stats for both
-    String weekdayAvg = '-', weekendAvg = '-';
-    if (weekdaySpots.isNotEmpty) {
-      final avg = weekdaySpots.map((s) => s.y).reduce((a, b) => a + b) /
-          weekdaySpots.length;
-      weekdayAvg = '${avg.toStringAsFixed(1)} dBm';
+    String predictedAvg = '-', historicalAvg = '-';
+    if (predictedSpots.isNotEmpty) {
+      final avg = predictedSpots.map((s) => s.y).reduce((a, b) => a + b) /
+          predictedSpots.length;
+      predictedAvg = '${avg.toStringAsFixed(1)} dBm';
     }
-    if (weekendSpots.isNotEmpty) {
-      final avg = weekendSpots.map((s) => s.y).reduce((a, b) => a + b) /
-          weekendSpots.length;
-      weekendAvg = '${avg.toStringAsFixed(1)} dBm';
+    if (historicalSpots.isNotEmpty) {
+      final avg = historicalSpots.map((s) => s.y).reduce((a, b) => a + b) /
+          historicalSpots.length;
+      historicalAvg = '${avg.toStringAsFixed(1)} dBm';
     }
+
+    // Source display label
+    final sourceLabel = _predictedSource == 'lstm' ? 'LSTM' :
+        _predictedSource == 'profiles' ? 'Profiles' : 'RF';
 
     return Column(
       children: [
@@ -772,11 +783,28 @@ class _APTrendDialogState extends State<APTrendDialog> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildCompareLegendItem('Weekday', Colors.blue, weekdayAvg),
-              _buildCompareLegendItem('Weekend', Colors.orange, weekendAvg),
+              _buildCompareLegendItem('Predicted ($sourceLabel)', Colors.blue, predictedAvg),
+              if (_hasHistorical)
+                _buildCompareLegendItem('Historical', Colors.green, historicalAvg)
+              else
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text(
+                    'No historical data',
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                  ),
+                ),
             ],
           ),
         ),
+        if (_hasHistorical && _totalMeasurements > 0)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              'Based on $_totalMeasurements historical measurements',
+              style: TextStyle(fontSize: 9, color: Colors.grey[500]),
+            ),
+          ),
         const SizedBox(height: 8),
         // Dual-line chart
         Expanded(
@@ -835,9 +863,9 @@ class _APTrendDialogState extends State<APTrendDialog> {
               minY: minDb,
               maxY: maxDb,
               lineBarsData: [
-                // Weekday line (blue)
+                // Predicted line (blue)
                 LineChartBarData(
-                  spots: weekdaySpots,
+                  spots: predictedSpots,
                   isCurved: true,
                   curveSmoothness: 0.3,
                   color: Colors.blue,
@@ -859,44 +887,45 @@ class _APTrendDialogState extends State<APTrendDialog> {
                     color: Colors.blue.withValues(alpha: 0.06),
                   ),
                 ),
-                // Weekend line (orange)
-                LineChartBarData(
-                  spots: weekendSpots,
-                  isCurved: true,
-                  curveSmoothness: 0.3,
-                  color: Colors.orange,
-                  barWidth: 2.5,
-                  isStrokeCapRound: true,
-                  dashArray: [6, 3],
-                  dotData: FlDotData(
-                    show: true,
-                    getDotPainter: (spot, percent, barData, index) {
-                      return FlDotCirclePainter(
-                        radius: 3,
-                        color: Colors.orange,
-                        strokeWidth: 1.5,
-                        strokeColor: Colors.white,
-                      );
-                    },
+                // Historical line (green, dashed)
+                if (_hasHistorical && historicalSpots.isNotEmpty)
+                  LineChartBarData(
+                    spots: historicalSpots,
+                    isCurved: true,
+                    curveSmoothness: 0.3,
+                    color: Colors.green,
+                    barWidth: 2.5,
+                    isStrokeCapRound: true,
+                    dashArray: [6, 3],
+                    dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, percent, barData, index) {
+                        return FlDotCirclePainter(
+                          radius: 3,
+                          color: Colors.green,
+                          strokeWidth: 1.5,
+                          strokeColor: Colors.white,
+                        );
+                      },
+                    ),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      color: Colors.green.withValues(alpha: 0.06),
+                    ),
                   ),
-                  belowBarData: BarAreaData(
-                    show: true,
-                    color: Colors.orange.withValues(alpha: 0.06),
-                  ),
-                ),
               ],
               lineTouchData: LineTouchData(
                 touchTooltipData: LineTouchTooltipData(
                   getTooltipItems: (touchedSpots) {
                     return touchedSpots.map((spot) {
-                      final label = spot.barIndex == 0 ? 'Weekday' : 'Weekend';
+                      final label = spot.barIndex == 0 ? 'Pred' : 'Hist';
                       final db = spot.y;
                       return LineTooltipItem(
                         '${spot.x.toInt()}:00\n$label: ${db.toStringAsFixed(1)} dBm',
                         TextStyle(
                           color: spot.barIndex == 0
                               ? Colors.blue
-                              : Colors.orange,
+                              : Colors.green,
                           fontWeight: FontWeight.bold,
                           fontSize: 12,
                         ),

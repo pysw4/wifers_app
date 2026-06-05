@@ -2011,36 +2011,135 @@ async def get_ap_signal_accuracy(ap_name: str):
 
 @app.get("/predict/signal_strength/ap_trend/{ap_name}/compare")
 async def get_ap_trend_compare(ap_name: str):
-    try:
-        model = _load_signal_strength_model()
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+    """Compare today's predicted trend vs historical actual averages (24h).
+
+    Returns:
+      - ap_name, building, floor
+      - predicted: 24-hour array of predicted signal_db (from profiles/RF)
+      - historical: 24-hour array of historical actual averages
+        (from actual_signal_averages.json, smoothed/interpolated to fill gaps)
+      - has_historical: whether historical data is available
+    """
     ap_entry = _find_ap_in_index(ap_name)
     if ap_entry is None:
         raise HTTPException(status_code=404, detail=f"AP '{ap_name}' not found")
     building = ap_entry["building"]
     floor = ap_entry["floor"]
-    building_code = _encode_building(building)
-    ap_name_code = _encode_ap_name(ap_entry["name"])
+    cache_key = ap_name.strip().lower()
 
-    def _predict_for_day(day_of_week: float, is_weekend: float) -> list:
+    # ── Predict today's 24h trend (same logic as get_ap_daily_trend) ──
+    today = datetime.now()
+    day_of_week = today.weekday()
+    is_weekend = 1.0 if day_of_week >= 5 else 0.0
+    day_of_month = float(today.day)
+    month = float(today.month)
+
+    predicted_trend = []  # 24-hour predicted signal_db
+    predicted_source = "unknown"
+
+    # 1) Try LSTM
+    lstm_trend = _predict_lstm_trend_24h(ap_name)
+    if lstm_trend is not None:
+        predicted_source = "lstm"
+        for h_entry in lstm_trend:
+            hour = h_entry["hour"]
+            score = h_entry["predicted_score"]
+            signal_db = _map_score_to_dbm(score)
+            predicted_trend.append({
+                "hour": hour,
+                "signal_db": round(signal_db, 1),
+            })
+
+    if predicted_source == "unknown":
+        # 2) Try profiles
+        profile_arr = _load_one_profile(ap_name)
+        if profile_arr is not None:
+            predicted_source = "profiles"
+            for hour in range(24):
+                signal_db = _get_profile_feat(profile_arr, day_of_week, hour, 'signal_db', -70.0)
+                predicted_trend.append({
+                    "hour": hour,
+                    "signal_db": round(signal_db, 1),
+                })
+
+    if predicted_source == "unknown":
+        # 3) RF fallback
+        predicted_source = "rf_model"
+        try:
+            model = _load_signal_strength_model()
+        except FileNotFoundError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        building_code = _encode_building(building)
+        ap_name_code = _encode_ap_name(ap_entry["name"])
         import pandas as pd
         rows = []
         for hour in range(24):
-            rows.append(_build_signal_features(building_code=building_code, floor=floor, hour=float(hour), day_of_week=day_of_week, is_weekend=is_weekend, day_of_month=15.0, month=4.0, ap_name_code=ap_name_code))
+            rows.append(_build_signal_features(
+                building_code=building_code, floor=floor,
+                hour=float(hour), day_of_week=float(day_of_week),
+                is_weekend=is_weekend, day_of_month=day_of_month,
+                month=month, ap_name_code=ap_name_code
+            ))
         df = pd.DataFrame(rows)
         predictions = model.predict(df)
-        # Smooth predictions
         smoothed = _smooth_series([float(p) for p in predictions], window=5)
-        result = []
         for hour, signal_db in enumerate(smoothed):
-            quality_info = _dbm_to_quality(float(signal_db))
-            result.append({"hour": hour, "signal_db": round(float(signal_db), 1), "signal_quality": quality_info["quality"], "bars": quality_info["bars"]})
-        return result
+            predicted_trend.append({
+                "hour": hour,
+                "signal_db": round(float(signal_db), 1),
+            })
 
-    weekday_trend = _predict_for_day(0.0, 0.0)
-    weekend_trend = _predict_for_day(5.0, 1.0)
-    return {"ap_name": ap_name, "building": building, "weekday": {"label": "Weekday (Mon)", "trend": weekday_trend}, "weekend": {"label": "Weekend (Sat)", "trend": weekend_trend}}
+    # ── Historical actual averages ──
+    actual_data = _load_actual_signal_data().get(cache_key, {})
+    has_historical = bool(actual_data and actual_data.get("hourly"))
+    historical_trend = []
+
+    if has_historical:
+        hourly_actual = _smooth_actual_hourly(actual_data["hourly"], min_samples=20)
+        # Build full 24h array via interpolation
+        actual_hours = sorted(h for h in hourly_actual.keys() if hourly_actual[h].get("actual_mean") is not None)
+        full_actual = {}
+        if len(actual_hours) >= 2:
+            for h in range(24):
+                if h in hourly_actual and hourly_actual[h].get("actual_mean") is not None:
+                    full_actual[h] = hourly_actual[h]["actual_mean"]
+                else:
+                    before = [ah for ah in actual_hours if ah < h]
+                    after = [ah for ah in actual_hours if ah > h]
+                    if before and after:
+                        hb, ha = before[-1], after[0]
+                        vb = hourly_actual[hb]["actual_mean"]
+                        va = hourly_actual[ha]["actual_mean"]
+                        ratio = (h - hb) / (ha - hb)
+                        full_actual[h] = round(vb + (va - vb) * ratio, 1)
+                    elif before:
+                        full_actual[h] = hourly_actual[before[-1]]["actual_mean"]
+                    elif after:
+                        full_actual[h] = hourly_actual[after[0]]["actual_mean"]
+        elif len(actual_hours) == 1:
+            v = hourly_actual[actual_hours[0]]["actual_mean"]
+            for h in range(24):
+                full_actual[h] = v
+        else:
+            has_historical = False
+
+        if has_historical:
+            for h in range(24):
+                historical_trend.append({
+                    "hour": h,
+                    "signal_db": round(full_actual.get(h, 0), 1),
+                })
+
+    return {
+        "ap_name": ap_name,
+        "building": building,
+        "floor": int(floor),
+        "predicted_source": predicted_source,
+        "has_historical": has_historical,
+        "total_measurements": actual_data.get("total_measurements", 0) if has_historical else 0,
+        "predicted": predicted_trend,
+        "historical": historical_trend,
+    }
 
 
 @app.post("/recommend")
@@ -2649,3 +2748,6 @@ async def _startup_precompute():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False, log_level="info")
+
+
+    
