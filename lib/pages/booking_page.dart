@@ -44,6 +44,10 @@ class BookingPageState extends State<BookingPage> {
   List<HourAvailability> _availabilityHours = [];
   bool _availabilityLoading = false;
 
+  // Suggest-slot state
+  bool _suggestSlotLoading = false;
+  Map<String, dynamic>? _suggestedSlot;
+
   static const _perfOptions = ['Poor', 'Fair', 'Good', 'Excellent', 'Excellent+', 'Excellent++'];
   static const _perfColors = {
     'Very Poor': Colors.red,
@@ -307,6 +311,53 @@ class BookingPageState extends State<BookingPage> {
       _showSnackBar('Failed to find alternatives: ${e.message}');
     } catch (e) {
       _showSnackBar('Failed to find alternatives: $e');
+    }
+  }
+
+  Future<void> _suggestBestSlot() async {
+    final roomCode = _selectedRoomCode;
+    final nStudentsStr = _nStudentsController.text.trim();
+
+    if (roomCode == null || roomCode.isEmpty) {
+      _showSnackBar('Please select a Room Code');
+      return;
+    }
+    final nStudents = int.tryParse(nStudentsStr) ?? 30;
+    if (nStudents < 1 || nStudents > 200) {
+      _showSnackBar('Students must be between 1 and 200');
+      return;
+    }
+
+    // Use startHour-endHour as desired duration preference
+    final durationHours = _endHour - _startHour;
+
+    setState(() {
+      _suggestSlotLoading = true;
+      _suggestedSlot = null;
+    });
+
+    try {
+      final resp = await _api.suggestBestSlot(
+        roomCode: roomCode,
+        date: _formatDate(_selectedDate),
+        durationHours: durationHours > 0 ? durationHours : 2,
+        nStudents: nStudents,
+      );
+
+      setState(() {
+        _suggestedSlot = resp['suggested_slot'] as Map<String, dynamic>?;
+        _suggestSlotLoading = false;
+      });
+
+      if (_suggestedSlot == null) {
+        _showSnackBar('No suitable slot found for this room/date');
+      }
+    } on ApiException catch (e) {
+      setState(() => _suggestSlotLoading = false);
+      _showSnackBar('Failed to suggest slot: ${e.message}');
+    } catch (e) {
+      setState(() => _suggestSlotLoading = false);
+      _showSnackBar('Error: $e');
     }
   }
 
@@ -651,7 +702,110 @@ class BookingPageState extends State<BookingPage> {
               },
             ),
 
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
+
+            // Suggest Best Slot button
+            if (_selectedRoomCode != null && _selectedRoomCode!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Row(
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _suggestSlotLoading ? null : () => _suggestBestSlot(),
+                      icon: _suggestSlotLoading
+                          ? const SizedBox(
+                              width: 16, height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.auto_awesome, size: 18, color: Colors.deepPurple),
+                      label: const Text('Suggest Best Slot',
+                          style: TextStyle(color: Colors.deepPurple)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.deepPurple),
+                      ),
+                    ),
+                    if (_suggestedSlot != null)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 8),
+                        child: Text(
+                          '✨ Best: ${_suggestedSlot!['start_hour']}:00 - ${_suggestedSlot!['end_hour']}:00',
+                          style: TextStyle(fontSize: 12, color: Colors.deepPurple[700], fontWeight: FontWeight.w500),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+
+            // Suggested slot detail card
+            if (_suggestedSlot != null)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.deepPurple[50],
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.deepPurple[200]!),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.auto_awesome, size: 16, color: Colors.deepPurple),
+                        const SizedBox(width: 6),
+                        const Text('Recommended Slot',
+                            style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.deepPurple)),
+                        const Spacer(),
+                        TextButton.icon(
+                          onPressed: () {
+                            setState(() {
+                              _startHour = _suggestedSlot!['start_hour'] as int;
+                              _endHour = _suggestedSlot!['end_hour'] as int;
+                              _suggestedSlot = null;
+                            });
+                            _showSnackBar('Applied suggested time slot');
+                          },
+                          icon: const Icon(Icons.check_circle, size: 16),
+                          label: const Text('Apply', style: TextStyle(fontSize: 12)),
+                          style: TextButton.styleFrom(
+                            foregroundColor: Colors.deepPurple,
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${_suggestedSlot!['start_hour']}:00 - ${_suggestedSlot!['end_hour']}:00',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                    ),
+                    if (_suggestedSlot!['performance'] != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Row(
+                          children: [
+                            Icon(Icons.signal_wifi_4_bar, size: 16,
+                                color: _perfColors[_suggestedSlot!['performance']] ?? Colors.grey),
+                            const SizedBox(width: 6),
+                            Text('Performance: ${_suggestedSlot!['performance']}',
+                                style: const TextStyle(fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                    if (_suggestedSlot!['reason'] != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                          _suggestedSlot!['reason'] as String,
+                          style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+
+            const SizedBox(height: 8),
 
             // Availability grid
             if (_selectedRoomCode != null && _selectedRoomCode!.isNotEmpty)
